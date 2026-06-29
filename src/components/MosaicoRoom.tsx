@@ -9,7 +9,19 @@ import confetti from "canvas-confetti";
 
 type GridCell = { id: string; targetColor: number; painted: boolean; paintedBy: string | null };
 type PresenceUser = { name: string; color: string; presence_ref: string };
-type GameState = { status: "lobby" | "playing" | "won" | "lost"; grid: GridCell[]; hp: number; time: number; assignment: Record<string, number>; shuffleInterval?: number };
+type ErrorMode = "hp" | "unpaint_self" | "unpaint_any";
+type GameState = {
+  status: "lobby" | "playing" | "won" | "lost";
+  grid: GridCell[];
+  hp: number;
+  time: number;
+  assignment: Record<string, number>;
+  shuffleInterval?: number;
+  cols?: number;
+  rows?: number;
+  hostName?: string;
+  errorMode?: ErrorMode;
+};
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -20,9 +32,19 @@ const COLORS = [
   { hex: "#A855F7", bg: "rgba(168,85,247,0.18)", border: "rgba(168,85,247,0.4)", glow: "rgba(168,85,247,0.6)", name: "Roxo" },
   { hex: "#F59E0B", bg: "rgba(245,158,11,0.18)", border: "rgba(245,158,11,0.4)", glow: "rgba(245,158,11,0.6)", name: "Laranja" },
   { hex: "#EC4899", bg: "rgba(236,72,153,0.18)", border: "rgba(236,72,153,0.4)", glow: "rgba(236,72,153,0.6)", name: "Rosa" },
+  { hex: "#06B6D4", bg: "rgba(6,182,212,0.18)", border: "rgba(6,182,212,0.4)", glow: "rgba(6,182,212,0.6)", name: "Ciano" },
+  { hex: "#EAB308", bg: "rgba(234,179,8,0.18)", border: "rgba(234,179,8,0.4)", glow: "rgba(234,179,8,0.6)", name: "Amarelo" },
+  { hex: "#94A3B8", bg: "rgba(148,163,184,0.18)", border: "rgba(148,163,184,0.4)", glow: "rgba(148,163,184,0.6)", name: "Prata" },
+  { hex: "#854D0E", bg: "rgba(133,77,14,0.18)", border: "rgba(133,77,14,0.4)", glow: "rgba(133,77,14,0.6)", name: "Marrom" },
+  { hex: "#6366F1", bg: "rgba(99,102,241,0.18)", border: "rgba(99,102,241,0.4)", glow: "rgba(99,102,241,0.6)", name: "Índigo" },
+  { hex: "#D946EF", bg: "rgba(217,70,239,0.18)", border: "rgba(217,70,239,0.4)", glow: "rgba(217,70,239,0.6)", name: "Fúcsia" },
+  { hex: "#FFFFFF", bg: "rgba(255,255,255,0.15)", border: "rgba(255,255,255,0.4)", glow: "rgba(255,255,255,0.6)", name: "Branco" },
+  { hex: "#1F2937", bg: "rgba(31,41,55,0.4)", border: "rgba(75,85,99,0.5)", glow: "rgba(156,163,175,0.3)", name: "Preto" },
+  { hex: "#84CC16", bg: "rgba(132,204,22,0.18)", border: "rgba(132,204,22,0.4)", glow: "rgba(132,204,22,0.6)", name: "Lima" },
+  { hex: "#FF8A65", bg: "rgba(255,138,101,0.18)", border: "rgba(255,138,101,0.4)", glow: "rgba(255,138,101,0.6)", name: "Pêssego" },
 ];
 
-const PALETTE = ["#EF4444", "#3B82F6", "#22C55E", "#8B5CF6", "#F59E0B", "#EC4899", "#14B8A6", "#1e293b"];
+const PALETTE = ["#EF4444", "#3B82F6", "#22C55E", "#A855F7", "#F59E0B", "#EC4899", "#06B6D4", "#EAB308", "#94A3B8", "#854D0E", "#6366F1", "#D946EF", "#FFFFFF", "#1F2937", "#84CC16", "#FF8A65"];
 const GRID_COLS = 8;
 const GRID_ROWS = 12;
 const MAX_HP = 100;
@@ -35,8 +57,8 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-function makeGrid(nColors: number): GridCell[] {
-  const pool = shuffle(Array.from({ length: GRID_COLS * GRID_ROWS }, (_, i) => i % nColors));
+function makeGrid(nColors: number, cols: number, rows: number): GridCell[] {
+  const pool = shuffle(Array.from({ length: cols * rows }, (_, i) => i % nColors));
   return pool.map((t, i) => ({ id: `c${i}`, targetColor: t, painted: false, paintedBy: null }));
 }
 
@@ -71,19 +93,18 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
   const [time, setTime] = useState(DURATION);
   const [assignment, setAssignment] = useState<Record<string, number>>({});
   const [shuffleInterval, setShuffleInterval] = useState(2);
+  const [cols, setCols] = useState(GRID_COLS);
+  const [rows, setRows] = useState(GRID_ROWS);
+  const [hostName, setHostName] = useState<string | null>(null);
+  const [errorMode, setErrorMode] = useState<ErrorMode>("hp");
 
   // Elias master config (pre-game adjustable)
   const [customDuration, setCustomDuration] = useState(DURATION);
   const [customMaxHp, setCustomMaxHp] = useState(MAX_HP);
-  const [customShuffleInterval, setCustomShuffleInterval] = useState(2);
-
-  // Visual FX
-  const [shakeCells, setShakeCells] = useState<Set<string>>(new Set());
-  const [popCells, setPopCells] = useState<Set<string>>(new Set());
-
-  const channelRef = useRef<any>(null);
-  const stateRef = useRef({ status, grid, hp, time, assignment, activeUsers, shuffleInterval });
-  useEffect(() => { stateRef.current = { status, grid, hp, time, assignment, activeUsers, shuffleInterval }; });
+  const [customShuffleInterval, setCustomShuffleInterval] = useState(2.5);
+  const [customCols, setCustomCols] = useState(GRID_COLS);
+  const [customRows, setCustomRows] = useState(GRID_ROWS);
+  const [customErrorMode, setCustomErrorMode] = useState<ErrorMode>("hp");
 
   // Host detection
   const isElias = userName.trim().toLowerCase() === "elias";
@@ -92,7 +113,15 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
     if (activeUsers.some(u => u.name.toLowerCase() === "elias")) return "elias";
     return [...activeUsers].sort((a, b) => a.name.localeCompare(b.name))[0]?.name ?? null;
   };
-  const isHost = isElias || (presenceSynced && getHost() === userName && !activeUsers.some(u => u.name.toLowerCase() === "elias"));
+  const isHost = isElias || (status === "playing" && hostName ? hostName === userName : (presenceSynced && getHost() === userName && !activeUsers.some(u => u.name.toLowerCase() === "elias")));
+
+  // Visual FX
+  const [shakeCells, setShakeCells] = useState<Set<string>>(new Set());
+  const [popCells, setPopCells] = useState<Set<string>>(new Set());
+
+  const channelRef = useRef<any>(null);
+  const stateRef = useRef({ status, grid, hp, time, assignment, activeUsers, shuffleInterval, cols, rows, isHost, hostName, errorMode });
+  useEffect(() => { stateRef.current = { status, grid, hp, time, assignment, activeUsers, shuffleInterval, cols, rows, isHost, hostName, errorMode }; });
 
   // Derived
   const myIdx = assignment[userName] ?? -1;
@@ -109,29 +138,53 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
   // Broadcast state helper
   const broadcastState = (s: GameState) => { channelRef.current?.send({ type: "broadcast", event: "mosaico-state", payload: s }); };
 
-  // Host loop — runs every second, shuffles unpainted cells based on shuffleInterval config
+  // Host loop — runs every 500ms, completely stable, reads state from ref to avoid restarts
   useEffect(() => {
-    if (!isJoined || !isHost || status !== "playing") return;
     let tick = 0;
     const iv = setInterval(() => {
       const cur = stateRef.current;
-      if (cur.status !== "playing") return;
-      const newTime = Math.max(0, cur.time - 1);
+      if (!isJoined || !cur.isHost || cur.status !== "playing") {
+        tick = 0; // Reset tick when not active
+        return;
+      }
+
+      // Decrement time every 2 ticks (1 second)
+      let newTime = cur.time;
+      if (tick % 2 === 0) {
+        newTime = Math.max(0, cur.time - 1);
+      }
+
       const allPainted = cur.grid.length > 0 && cur.grid.every(c => c.painted);
       let newStatus: GameState["status"] = cur.status;
       if (allPainted) { newStatus = "won"; celebrate(); channelRef.current?.send({ type: "broadcast", event: "celebrate", payload: {} }); }
       else if (newTime <= 0 || cur.hp <= 0) { newStatus = "lost"; }
-      // Shuffle unpainted cell positions every N seconds (if shuffleInterval > 0)
+
       tick++;
-      const shouldShuffle = newStatus === "playing" && cur.shuffleInterval !== undefined && cur.shuffleInterval > 0 && (tick % cur.shuffleInterval === 0);
+      // Shuffle unpainted cell positions every N ticks (e.g. 0.5s = 1 tick, 1.0s = 2 ticks, 1.5s = 3 ticks, etc.)
+      const ticksPerShuffle = cur.shuffleInterval !== undefined ? Math.round(cur.shuffleInterval * 2) : 4;
+      const shouldShuffle = newStatus === "playing" && ticksPerShuffle > 0 && (tick % ticksPerShuffle === 0);
       const newGrid = shouldShuffle ? shuffleUnpainted(cur.grid) : cur.grid;
-      setTime(newTime);
+
+      if (tick % 2 === 0) {
+        setTime(newTime);
+      }
       setStatus(newStatus);
       setGrid(newGrid);
-      broadcastState({ status: newStatus, grid: newGrid, hp: cur.hp, time: newTime, assignment: cur.assignment, shuffleInterval: cur.shuffleInterval });
-    }, 1000);
+      broadcastState({
+        status: newStatus,
+        grid: newGrid,
+        hp: cur.hp,
+        time: newTime,
+        assignment: cur.assignment,
+        shuffleInterval: cur.shuffleInterval,
+        cols: cur.cols,
+        rows: cur.rows,
+        hostName: cur.hostName || undefined,
+        errorMode: cur.errorMode
+      });
+    }, 500);
     return () => clearInterval(iv);
-  }, [isJoined, isHost, status]);
+  }, [isJoined]);
 
   // Channel setup
   useEffect(() => {
@@ -142,12 +195,16 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
     ch.on("broadcast", { event: "mosaico-state" }, ({ payload }: { payload: GameState }) => {
       setStatus(payload.status); setGrid(payload.grid); setHp(payload.hp); setTime(payload.time); setAssignment(payload.assignment);
       if (payload.shuffleInterval !== undefined) setShuffleInterval(payload.shuffleInterval);
+      if (payload.cols !== undefined) setCols(payload.cols);
+      if (payload.rows !== undefined) setRows(payload.rows);
+      if (payload.hostName !== undefined) setHostName(payload.hostName ?? null);
+      if (payload.errorMode !== undefined) setErrorMode(payload.errorMode);
     });
 
     ch.on("broadcast", { event: "request-mosaico" }, () => {
       if (!isHost) return;
       const cur = stateRef.current;
-      broadcastState({ status: cur.status, grid: cur.grid, hp: cur.hp, time: cur.time, assignment: cur.assignment, shuffleInterval: cur.shuffleInterval });
+      broadcastState({ status: cur.status, grid: cur.grid, hp: cur.hp, time: cur.time, assignment: cur.assignment, shuffleInterval: cur.shuffleInterval, cols: cur.cols, rows: cur.rows, hostName: cur.hostName || undefined, errorMode: cur.errorMode });
     });
 
     ch.on("broadcast", { event: "cell-paint" }, ({ payload }: { payload: { cellId: string; by: string } }) => {
@@ -161,10 +218,24 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
       if (pIdx >= 0 && pIdx === cell.targetColor) {
         newGrid = cur.grid.map(c => c.id === payload.cellId ? { ...c, painted: true, paintedBy: payload.by } : c);
       } else {
-        newHp = Math.max(0, cur.hp - HP_LOSS);
+        if (cur.errorMode === "unpaint_self") {
+          const paintedByMe = cur.grid.filter(c => c.painted && c.paintedBy === payload.by);
+          if (paintedByMe.length > 0) {
+            const targetToUnpaint = paintedByMe[Math.floor(Math.random() * paintedByMe.length)];
+            newGrid = cur.grid.map(c => c.id === targetToUnpaint.id ? { ...c, painted: false, paintedBy: null } : c);
+          }
+        } else if (cur.errorMode === "unpaint_any") {
+          const paintedAny = cur.grid.filter(c => c.painted);
+          if (paintedAny.length > 0) {
+            const targetToUnpaint = paintedAny[Math.floor(Math.random() * paintedAny.length)];
+            newGrid = cur.grid.map(c => c.id === targetToUnpaint.id ? { ...c, painted: false, paintedBy: null } : c);
+          }
+        } else {
+          newHp = Math.max(0, cur.hp - HP_LOSS);
+        }
       }
       setGrid(newGrid); setHp(newHp);
-      broadcastState({ status: cur.status, grid: newGrid, hp: newHp, time: cur.time, assignment: cur.assignment, shuffleInterval: cur.shuffleInterval });
+      broadcastState({ status: cur.status, grid: newGrid, hp: newHp, time: cur.time, assignment: cur.assignment, shuffleInterval: cur.shuffleInterval, cols: cur.cols, rows: cur.rows, hostName: cur.hostName || undefined, errorMode: cur.errorMode });
     });
 
     ch.on("broadcast", { event: "celebrate" }, () => celebrate());
@@ -194,12 +265,26 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
     const nColors = Math.min(sorted.length, COLORS.length);
     const asgn: Record<string, number> = {};
     sorted.forEach((u, i) => { asgn[u.name] = i % nColors; });
-    const newGrid = makeGrid(nColors);
+    const finalCols = isElias ? customCols : GRID_COLS;
+    const finalRows = isElias ? customRows : GRID_ROWS;
+    const newGrid = makeGrid(nColors, finalCols, finalRows);
     const initHp = isElias ? customMaxHp : MAX_HP;
     const initTime = isElias ? customDuration : DURATION;
     const initShuffle = isElias ? customShuffleInterval : 2;
-    const s: GameState = { status: "playing", grid: newGrid, hp: initHp, time: initTime, assignment: asgn, shuffleInterval: initShuffle };
-    setStatus("playing"); setGrid(newGrid); setHp(initHp); setTime(initTime); setAssignment(asgn); setShuffleInterval(initShuffle);
+    const initErrorMode = isElias ? customErrorMode : "hp";
+    const s: GameState = {
+      status: "playing",
+      grid: newGrid,
+      hp: initHp,
+      time: initTime,
+      assignment: asgn,
+      shuffleInterval: initShuffle,
+      cols: finalCols,
+      rows: finalRows,
+      hostName: userName,
+      errorMode: initErrorMode
+    };
+    setStatus("playing"); setGrid(newGrid); setHp(initHp); setTime(initTime); setAssignment(asgn); setShuffleInterval(initShuffle); setCols(finalCols); setRows(finalRows); setHostName(userName); setErrorMode(initErrorMode);
     broadcastState(s);
   };
 
@@ -207,26 +292,26 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
     if (!isElias || status !== "playing") return;
     const newTime = time + 60;
     setTime(newTime);
-    broadcastState({ status, grid, hp, time: newTime, assignment, shuffleInterval });
+    broadcastState({ status, grid, hp, time: newTime, assignment, shuffleInterval, cols, rows, hostName: hostName || undefined, errorMode });
   };
 
   const masterRestoreHp = () => {
     if (!isElias || status !== "playing") return;
     const newHp = Math.min(customMaxHp, hp + 30);
     setHp(newHp);
-    broadcastState({ status, grid, hp: newHp, time, assignment, shuffleInterval });
+    broadcastState({ status, grid, hp: newHp, time, assignment, shuffleInterval, cols, rows, hostName: hostName || undefined, errorMode });
   };
 
   const masterResetHp = () => {
     if (!isElias || status !== "playing") return;
     setHp(customMaxHp);
-    broadcastState({ status, grid, hp: customMaxHp, time, assignment, shuffleInterval });
+    broadcastState({ status, grid, hp: customMaxHp, time, assignment, shuffleInterval, cols, rows, hostName: hostName || undefined, errorMode });
   };
 
   const resetGame = () => {
     if (!isHost) return;
-    const s: GameState = { status: "lobby", grid: [], hp: MAX_HP, time: DURATION, assignment: {}, shuffleInterval: 2 };
-    setStatus("lobby"); setGrid([]); setHp(MAX_HP); setTime(DURATION); setAssignment({}); setShuffleInterval(2);
+    const s: GameState = { status: "lobby", grid: [], hp: MAX_HP, time: DURATION, assignment: {}, shuffleInterval: 2, cols: GRID_COLS, rows: GRID_ROWS, hostName: undefined, errorMode: undefined };
+    setStatus("lobby"); setGrid([]); setHp(MAX_HP); setTime(DURATION); setAssignment({}); setShuffleInterval(2); setCols(GRID_COLS); setRows(GRID_ROWS); setHostName(null); setErrorMode("hp");
     broadcastState(s);
   };
 
@@ -244,15 +329,30 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
     channelRef.current?.send({ type: "broadcast", event: "cell-paint", payload: { cellId: cell.id, by: userName } });
     // Host handles locally too
     if (isHost) {
+      let newGrid = grid;
+      let newHp = hp;
       if (correct) {
-        const newGrid = grid.map(c => c.id === cell.id ? { ...c, painted: true, paintedBy: userName } : c);
-        setGrid(newGrid);
-        broadcastState({ status, grid: newGrid, hp, time, assignment, shuffleInterval });
+        newGrid = grid.map(c => c.id === cell.id ? { ...c, painted: true, paintedBy: userName } : c);
       } else {
-        const newHp = Math.max(0, hp - HP_LOSS);
-        setHp(newHp);
-        broadcastState({ status, grid, hp: newHp, time, assignment, shuffleInterval });
+        if (errorMode === "unpaint_self") {
+          const paintedByMe = grid.filter(c => c.painted && c.paintedBy === userName);
+          if (paintedByMe.length > 0) {
+            const targetToUnpaint = paintedByMe[Math.floor(Math.random() * paintedByMe.length)];
+            newGrid = grid.map(c => c.id === targetToUnpaint.id ? { ...c, painted: false, paintedBy: null } : c);
+          }
+        } else if (errorMode === "unpaint_any") {
+          const paintedAny = grid.filter(c => c.painted);
+          if (paintedAny.length > 0) {
+            const targetToUnpaint = paintedAny[Math.floor(Math.random() * paintedAny.length)];
+            newGrid = grid.map(c => c.id === targetToUnpaint.id ? { ...c, painted: false, paintedBy: null } : c);
+          }
+        } else {
+          newHp = Math.max(0, hp - HP_LOSS);
+        }
       }
+      setGrid(newGrid);
+      setHp(newHp);
+      broadcastState({ status, grid: newGrid, hp: newHp, time, assignment, shuffleInterval, cols, rows, hostName: hostName || undefined, errorMode });
     }
   };
 
@@ -339,7 +439,7 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
   const secs = String(time % 60).padStart(2, "0");
 
   return (
-    <main className="flex flex-col bg-slate-950 text-white select-none" style={{ minHeight: "100dvh" }}>
+    <main className="flex flex-col bg-slate-950 text-white select-none h-dvh overflow-hidden">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/60 backdrop-blur shrink-0"
@@ -379,11 +479,11 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
       </div>
 
       {/* ── Main content ── */}
-      <div className="flex-1 flex flex-col items-center justify-start p-4 overflow-y-auto pb-32">
+      <div className="flex-1 w-full flex flex-col items-center justify-start p-4 overflow-hidden">
 
         {/* Lobby */}
         {status === "lobby" && (
-          <div className="flex-1 flex flex-col items-center justify-center text-center max-w-xs w-full gap-6">
+          <div className="flex-1 w-full max-w-xs flex flex-col items-center justify-start gap-6 overflow-y-auto pb-24 scrollbar-none">
             <div className="p-6 rounded-3xl bg-slate-900/40 border border-slate-800 w-full">
               <HelpCircle className="w-10 h-10 text-slate-500 mx-auto mb-3 animate-pulse" />
               <h3 className="font-extrabold text-slate-200 mb-2">Como funciona</h3>
@@ -437,11 +537,60 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
                       {customShuffleInterval === 0 ? "Desativado" : `${customShuffleInterval}s`}
                     </span>
                   </div>
-                  <input type="range" min={0} max={10} step={1} value={customShuffleInterval}
+                  <input type="range" min={0} max={10} step={0.5} value={customShuffleInterval}
                     onChange={e => setCustomShuffleInterval(Number(e.target.value))}
                     className="w-full accent-amber-400" />
                   <div className="flex justify-between text-[9px] text-slate-600 mt-0.5">
                     <span>Desativado (0)</span><span>10s</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-400 mb-1.5">Regra de Erro</div>
+                  <div className="grid grid-cols-3 gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800/80">
+                    <button
+                      onClick={() => setCustomErrorMode("hp")}
+                      className={`py-1.5 px-2 rounded-lg text-[9px] font-extrabold uppercase transition-all ${customErrorMode === "hp" ? "bg-amber-400 text-slate-950 shadow-md" : "text-slate-400 hover:text-white"}`}
+                    >
+                      Vida HP
+                    </button>
+                    <button
+                      onClick={() => setCustomErrorMode("unpaint_self")}
+                      className={`py-1.5 px-2 rounded-lg text-[9px] font-extrabold uppercase transition-all ${customErrorMode === "unpaint_self" ? "bg-amber-400 text-slate-950 shadow-md" : "text-slate-400 hover:text-white"}`}
+                    >
+                      Desmarcar Meu
+                    </button>
+                    <button
+                      onClick={() => setCustomErrorMode("unpaint_any")}
+                      className={`py-1.5 px-2 rounded-lg text-[9px] font-extrabold uppercase transition-all ${customErrorMode === "unpaint_any" ? "bg-amber-400 text-slate-950 shadow-md" : "text-slate-400 hover:text-white"}`}
+                    >
+                      Desmarcar Qualquer
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Colunas (Largura)</span>
+                      <span className="font-bold text-white">{customCols}</span>
+                    </div>
+                    <input type="range" min={4} max={12} step={1} value={customCols}
+                      onChange={e => setCustomCols(Number(e.target.value))}
+                      className="w-full accent-amber-400" />
+                    <div className="flex justify-between text-[9px] text-slate-600 mt-0.5">
+                      <span>4</span><span>12</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Linhas (Altura)</span>
+                      <span className="font-bold text-white">{customRows}</span>
+                    </div>
+                    <input type="range" min={4} max={20} step={1} value={customRows}
+                      onChange={e => setCustomRows(Number(e.target.value))}
+                      className="w-full accent-amber-400" />
+                    <div className="flex justify-between text-[9px] text-slate-600 mt-0.5">
+                      <span>4</span><span>20</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -458,10 +607,10 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
 
         {/* Playing grid */}
         {status === "playing" && (
-          <div className="w-full max-w-sm">
+          <div className="flex-1 w-full max-w-md flex flex-col items-center overflow-hidden pb-16">
             {/* My color badge */}
             {myColor && (
-              <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-xl border" style={{ borderColor: myColor.border, backgroundColor: myColor.bg }}>
+              <div className="w-full flex items-center gap-2 mb-2 px-3 py-2 rounded-xl border" style={{ borderColor: myColor.border, backgroundColor: myColor.bg }}>
                 <Paintbrush className="w-4 h-4" style={{ color: myColor.hex }} />
                 <span className="text-xs font-bold text-white">Você pinta em <span style={{ color: myColor.hex }}>{myColor.name}</span></span>
               </div>
@@ -469,7 +618,7 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
 
             {/* Elias in-game master panel */}
             {isElias && (
-              <div className="flex gap-2 mb-2">
+              <div className="w-full flex gap-2 mb-2">
                 <button onClick={masterAddTime}
                   className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-xl text-[10px] font-extrabold uppercase border border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors">
                   <Clock className="w-3 h-3" /> +60s
@@ -485,33 +634,40 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
               </div>
             )}
 
-            {/* Grid */}
-            <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)` }}>
-              {grid.map(cell => {
-                const tc = COLORS[cell.targetColor];
-                const isPainted = cell.painted;
-                const isShaking = shakeCells.has(cell.id);
-                const isPopping = popCells.has(cell.id);
+            {/* Scrollable grid container */}
+            <div className="flex-1 w-full overflow-y-auto overflow-x-hidden border border-slate-800/60 rounded-2xl p-2.5 bg-slate-950/20 backdrop-blur-sm scrollbar-thin scrollbar-thumb-slate-850 scrollbar-track-transparent">
+              <div
+                className="grid gap-1.5 mx-auto w-full"
+                style={{
+                  gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`
+                }}
+              >
+                {grid.map(cell => {
+                  const tc = COLORS[cell.targetColor];
+                  const isPainted = cell.painted;
+                  const isShaking = shakeCells.has(cell.id);
+                  const isPopping = popCells.has(cell.id);
 
-                return (
-                  <button
-                    key={cell.id}
-                    onClick={() => touchCell(cell)}
-                    className={`aspect-square rounded-xl border-2 flex items-center justify-center transition-colors duration-150 touch-none
-                      ${isShaking ? "animate-shake" : ""}
-                      ${isPopping ? "animate-cell-pop" : ""}
-                      ${isPainted ? "cursor-default" : "hover:scale-105 active:scale-95"}
-                    `}
-                    style={{
-                      backgroundColor: isPainted ? tc.hex + "cc" : tc.bg,
-                      borderColor: isPainted ? tc.hex : tc.border,
-                      boxShadow: isPainted ? `0 0 12px ${tc.glow}` : "none",
-                    }}
-                  >
-                    {isPainted && <CheckCircle2 className="w-4 h-4 text-white/90" />}
-                  </button>
-                );
-              })}
+                  return (
+                    <button
+                      key={cell.id}
+                      onClick={() => touchCell(cell)}
+                      className={`aspect-square rounded-xl border-2 flex items-center justify-center transition-colors duration-150 touch-pan-y
+                        ${isShaking ? "animate-shake" : ""}
+                        ${isPopping ? "animate-cell-pop" : ""}
+                        ${isPainted ? "cursor-default" : "hover:scale-105 active:scale-95"}
+                      `}
+                      style={{
+                        backgroundColor: isPainted ? tc.hex + "cc" : tc.bg,
+                        borderColor: isPainted ? tc.hex : tc.border,
+                        boxShadow: isPainted ? `0 0 12px ${tc.glow}` : "none",
+                      }}
+                    >
+                      {isPainted && <CheckCircle2 className="w-4 h-4 text-white/90" />}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
@@ -522,20 +678,27 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
         className="fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-900/90 backdrop-blur-xl px-4 py-3 shrink-0"
         style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
       >
-        {/* HP bar */}
-        <div className="flex items-center gap-2 mb-2">
-          <Heart className={`w-3.5 h-3.5 shrink-0 ${hpPct <= 30 ? "text-rose-400 animate-pulse" : "text-slate-400"}`} />
-          <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{
-                width: `${hpPct}%`,
-                background: hpPct > 60 ? "linear-gradient(90deg,#22c55e,#16a34a)" : hpPct > 30 ? "linear-gradient(90deg,#f59e0b,#d97706)" : "linear-gradient(90deg,#ef4444,#b91c1c)",
-              }}
-            />
+        {/* HP bar or Error mode rule indicator */}
+        {errorMode === "hp" ? (
+          <div className="flex items-center gap-2 mb-2">
+            <Heart className={`w-3.5 h-3.5 shrink-0 ${hpPct <= 30 ? "text-rose-400 animate-pulse" : "text-slate-400"}`} />
+            <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${hpPct}%`,
+                  background: hpPct > 60 ? "linear-gradient(90deg,#22c55e,#16a34a)" : hpPct > 30 ? "linear-gradient(90deg,#f59e0b,#d97706)" : "linear-gradient(90deg,#ef4444,#b91c1c)",
+                }}
+              />
+            </div>
+            <span className="text-[10px] text-slate-400 shrink-0">{hp} HP</span>
           </div>
-          <span className="text-[10px] text-slate-400 shrink-0">{hp} HP</span>
-        </div>
+        ) : (
+          <div className="flex items-center gap-1.5 mb-2 text-[10px] font-bold text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20 w-fit">
+            <Sparkles className="w-3 h-3 text-amber-400 animate-pulse" />
+            <span>Erros desmarcam: <strong className="uppercase">{errorMode === "unpaint_self" ? "Seu acerto" : "Qualquer acerto"}</strong></span>
+          </div>
+        )}
 
         <div className="flex items-center justify-between">
           {/* Timer */}
