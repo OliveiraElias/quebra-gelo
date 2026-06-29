@@ -9,7 +9,7 @@ import confetti from "canvas-confetti";
 
 type GridCell = { id: string; targetColor: number; painted: boolean; paintedBy: string | null };
 type PresenceUser = { name: string; color: string; presence_ref: string };
-type GameState = { status: "lobby" | "playing" | "won" | "lost"; grid: GridCell[]; hp: number; time: number; assignment: Record<string, number> };
+type GameState = { status: "lobby" | "playing" | "won" | "lost"; grid: GridCell[]; hp: number; time: number; assignment: Record<string, number>; shuffleInterval?: number };
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -70,18 +70,20 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
   const [hp, setHp] = useState(MAX_HP);
   const [time, setTime] = useState(DURATION);
   const [assignment, setAssignment] = useState<Record<string, number>>({});
+  const [shuffleInterval, setShuffleInterval] = useState(2);
 
   // Elias master config (pre-game adjustable)
   const [customDuration, setCustomDuration] = useState(DURATION);
   const [customMaxHp, setCustomMaxHp] = useState(MAX_HP);
+  const [customShuffleInterval, setCustomShuffleInterval] = useState(2);
 
   // Visual FX
   const [shakeCells, setShakeCells] = useState<Set<string>>(new Set());
   const [popCells, setPopCells] = useState<Set<string>>(new Set());
 
   const channelRef = useRef<any>(null);
-  const stateRef = useRef({ status, grid, hp, time, assignment, activeUsers });
-  useEffect(() => { stateRef.current = { status, grid, hp, time, assignment, activeUsers }; });
+  const stateRef = useRef({ status, grid, hp, time, assignment, activeUsers, shuffleInterval });
+  useEffect(() => { stateRef.current = { status, grid, hp, time, assignment, activeUsers, shuffleInterval }; });
 
   // Host detection
   const isElias = userName.trim().toLowerCase() === "elias";
@@ -107,7 +109,7 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
   // Broadcast state helper
   const broadcastState = (s: GameState) => { channelRef.current?.send({ type: "broadcast", event: "mosaico-state", payload: s }); };
 
-  // Host loop — runs every second, shuffles unpainted cells every 2 seconds
+  // Host loop — runs every second, shuffles unpainted cells based on shuffleInterval config
   useEffect(() => {
     if (!isJoined || !isHost || status !== "playing") return;
     let tick = 0;
@@ -119,13 +121,14 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
       let newStatus: GameState["status"] = cur.status;
       if (allPainted) { newStatus = "won"; celebrate(); channelRef.current?.send({ type: "broadcast", event: "celebrate", payload: {} }); }
       else if (newTime <= 0 || cur.hp <= 0) { newStatus = "lost"; }
-      // Shuffle unpainted cell positions every 2 ticks (every 2 seconds)
+      // Shuffle unpainted cell positions every N seconds (if shuffleInterval > 0)
       tick++;
-      const newGrid = (newStatus === "playing" && tick % 2 === 0) ? shuffleUnpainted(cur.grid) : cur.grid;
+      const shouldShuffle = newStatus === "playing" && cur.shuffleInterval !== undefined && cur.shuffleInterval > 0 && (tick % cur.shuffleInterval === 0);
+      const newGrid = shouldShuffle ? shuffleUnpainted(cur.grid) : cur.grid;
       setTime(newTime);
       setStatus(newStatus);
       setGrid(newGrid);
-      broadcastState({ status: newStatus, grid: newGrid, hp: cur.hp, time: newTime, assignment: cur.assignment });
+      broadcastState({ status: newStatus, grid: newGrid, hp: cur.hp, time: newTime, assignment: cur.assignment, shuffleInterval: cur.shuffleInterval });
     }, 1000);
     return () => clearInterval(iv);
   }, [isJoined, isHost, status]);
@@ -138,12 +141,13 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
 
     ch.on("broadcast", { event: "mosaico-state" }, ({ payload }: { payload: GameState }) => {
       setStatus(payload.status); setGrid(payload.grid); setHp(payload.hp); setTime(payload.time); setAssignment(payload.assignment);
+      if (payload.shuffleInterval !== undefined) setShuffleInterval(payload.shuffleInterval);
     });
 
     ch.on("broadcast", { event: "request-mosaico" }, () => {
       if (!isHost) return;
       const cur = stateRef.current;
-      broadcastState({ status: cur.status, grid: cur.grid, hp: cur.hp, time: cur.time, assignment: cur.assignment });
+      broadcastState({ status: cur.status, grid: cur.grid, hp: cur.hp, time: cur.time, assignment: cur.assignment, shuffleInterval: cur.shuffleInterval });
     });
 
     ch.on("broadcast", { event: "cell-paint" }, ({ payload }: { payload: { cellId: string; by: string } }) => {
@@ -160,7 +164,7 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
         newHp = Math.max(0, cur.hp - HP_LOSS);
       }
       setGrid(newGrid); setHp(newHp);
-      broadcastState({ status: cur.status, grid: newGrid, hp: newHp, time: cur.time, assignment: cur.assignment });
+      broadcastState({ status: cur.status, grid: newGrid, hp: newHp, time: cur.time, assignment: cur.assignment, shuffleInterval: cur.shuffleInterval });
     });
 
     ch.on("broadcast", { event: "celebrate" }, () => celebrate());
@@ -193,8 +197,9 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
     const newGrid = makeGrid(nColors);
     const initHp = isElias ? customMaxHp : MAX_HP;
     const initTime = isElias ? customDuration : DURATION;
-    const s: GameState = { status: "playing", grid: newGrid, hp: initHp, time: initTime, assignment: asgn };
-    setStatus("playing"); setGrid(newGrid); setHp(initHp); setTime(initTime); setAssignment(asgn);
+    const initShuffle = isElias ? customShuffleInterval : 2;
+    const s: GameState = { status: "playing", grid: newGrid, hp: initHp, time: initTime, assignment: asgn, shuffleInterval: initShuffle };
+    setStatus("playing"); setGrid(newGrid); setHp(initHp); setTime(initTime); setAssignment(asgn); setShuffleInterval(initShuffle);
     broadcastState(s);
   };
 
@@ -202,26 +207,26 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
     if (!isElias || status !== "playing") return;
     const newTime = time + 60;
     setTime(newTime);
-    broadcastState({ status, grid, hp, time: newTime, assignment });
+    broadcastState({ status, grid, hp, time: newTime, assignment, shuffleInterval });
   };
 
   const masterRestoreHp = () => {
     if (!isElias || status !== "playing") return;
     const newHp = Math.min(customMaxHp, hp + 30);
     setHp(newHp);
-    broadcastState({ status, grid, hp: newHp, time, assignment });
+    broadcastState({ status, grid, hp: newHp, time, assignment, shuffleInterval });
   };
 
   const masterResetHp = () => {
     if (!isElias || status !== "playing") return;
     setHp(customMaxHp);
-    broadcastState({ status, grid, hp: customMaxHp, time, assignment });
+    broadcastState({ status, grid, hp: customMaxHp, time, assignment, shuffleInterval });
   };
 
   const resetGame = () => {
     if (!isHost) return;
-    const s: GameState = { status: "lobby", grid: [], hp: MAX_HP, time: DURATION, assignment: {} };
-    setStatus("lobby"); setGrid([]); setHp(MAX_HP); setTime(DURATION); setAssignment({});
+    const s: GameState = { status: "lobby", grid: [], hp: MAX_HP, time: DURATION, assignment: {}, shuffleInterval: 2 };
+    setStatus("lobby"); setGrid([]); setHp(MAX_HP); setTime(DURATION); setAssignment({}); setShuffleInterval(2);
     broadcastState(s);
   };
 
@@ -242,11 +247,11 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
       if (correct) {
         const newGrid = grid.map(c => c.id === cell.id ? { ...c, painted: true, paintedBy: userName } : c);
         setGrid(newGrid);
-        broadcastState({ status, grid: newGrid, hp, time, assignment });
+        broadcastState({ status, grid: newGrid, hp, time, assignment, shuffleInterval });
       } else {
         const newHp = Math.max(0, hp - HP_LOSS);
         setHp(newHp);
-        broadcastState({ status, grid, hp: newHp, time, assignment });
+        broadcastState({ status, grid, hp: newHp, time, assignment, shuffleInterval });
       }
     }
   };
@@ -425,6 +430,20 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
                     <span>30 HP</span><span>300 HP</span>
                   </div>
                 </div>
+                <div>
+                  <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                    <span>Mudar Blocos A Cada</span>
+                    <span className="font-bold text-white">
+                      {customShuffleInterval === 0 ? "Desativado" : `${customShuffleInterval}s`}
+                    </span>
+                  </div>
+                  <input type="range" min={0} max={10} step={1} value={customShuffleInterval}
+                    onChange={e => setCustomShuffleInterval(Number(e.target.value))}
+                    className="w-full accent-amber-400" />
+                  <div className="flex justify-between text-[9px] text-slate-600 mt-0.5">
+                    <span>Desativado (0)</span><span>10s</span>
+                  </div>
+                </div>
               </div>
             )}
             {isHost ? (
@@ -478,7 +497,7 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
                   <button
                     key={cell.id}
                     onClick={() => touchCell(cell)}
-                    className={`aspect-square rounded-xl border-2 flex items-center justify-center transition-all duration-700 touch-none
+                    className={`aspect-square rounded-xl border-2 flex items-center justify-center transition-colors duration-150 touch-none
                       ${isShaking ? "animate-shake" : ""}
                       ${isPopping ? "animate-cell-pop" : ""}
                       ${isPainted ? "cursor-default" : "hover:scale-105 active:scale-95"}
