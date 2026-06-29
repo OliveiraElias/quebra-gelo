@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Quebra-Gelo Célula",
-  description: "Desenho compartilhado em tempo real para dinâmicas de quebra-gelo na célula",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://quebra-gelo.vercel.app"),
+  title: "Quebra-Gelo — Strongers 3",
+  description: "Joguinhos cooperativos em tempo real para a célula Strongers 3",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
