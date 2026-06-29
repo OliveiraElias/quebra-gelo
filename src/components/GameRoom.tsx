@@ -17,6 +17,9 @@ import {
   Home,
   Zap,
   Compass,
+  Pause,
+  Clock,
+  Play,
 } from "lucide-react";
 import confetti from "canvas-confetti";
 
@@ -65,6 +68,13 @@ export default function GameRoom({ roomId }: GameRoomProps) {
   const [activeDrawer, setActiveDrawer] = useState<string | null>(null);
   const [scores, setScores] = useState<Record<string, number>>({});
 
+  // Timer State
+  const [timeRemaining, setTimeRemaining] = useState(90);
+  const [maxTime, setMaxTime] = useState(90);
+  const [timerActive, setTimerActive] = useState(false);
+  const [timerStatus, setTimerStatus] = useState<"idle" | "running" | "ended">("idle");
+  const [presenceSynced, setPresenceSynced] = useState(false);
+
   // Drawing Settings
   const [brushSize, setBrushSize] = useState(4);
   const [color, setColor] = useState(BRUSH_COLORS[0]);
@@ -82,6 +92,17 @@ export default function GameRoom({ roomId }: GameRoomProps) {
   // Determine if the current user is the master (Elias)
   const isMaster = userName.trim().toLowerCase() === "elias";
 
+  // Host detection logic
+  const getHostName = () => {
+    if (activeUsers.length === 0) return null;
+    const eliasPresent = activeUsers.some((u) => u.name.toLowerCase() === "elias");
+    if (eliasPresent) return "elias";
+    const sorted = [...activeUsers].sort((a, b) => a.name.localeCompare(b.name));
+    return sorted[0]?.name || null;
+  };
+
+  const isHost = isMaster || (presenceSynced && getHostName() === userName && !activeUsers.some((u) => u.name.toLowerCase() === "elias"));
+
   // Refs to prevent stale state in subscription callbacks
   const activeDrawerRef = useRef<string | null>(null);
   const scoresRef = useRef<Record<string, number>>({});
@@ -93,6 +114,36 @@ export default function GameRoom({ roomId }: GameRoomProps) {
   useEffect(() => {
     scoresRef.current = scores;
   }, [scores]);
+
+  const stateRef = useRef<{
+    activeDrawer: string | null;
+    scores: Record<string, number>;
+    timeRemaining: number;
+    timerActive: boolean;
+    timerStatus: "idle" | "running" | "ended";
+    maxTime: number;
+    isHost: boolean;
+  }>({
+    activeDrawer,
+    scores,
+    timeRemaining,
+    timerActive,
+    timerStatus,
+    maxTime,
+    isHost,
+  });
+
+  useEffect(() => {
+    stateRef.current = {
+      activeDrawer,
+      scores,
+      timeRemaining,
+      timerActive,
+      timerStatus,
+      maxTime,
+      isHost,
+    };
+  }, [activeDrawer, scores, timeRemaining, timerActive, timerStatus, maxTime, isHost]);
 
   // Can the current user draw on the canvas?
   const canDraw = !activeDrawer || activeDrawer === userName;
@@ -177,17 +228,25 @@ export default function GameRoom({ roomId }: GameRoomProps) {
     channel.on("broadcast", { event: "state-update" }, (payload) => {
       setActiveDrawer(payload.payload.activeDrawer);
       setScores(payload.payload.scores);
+      if (payload.payload.timeRemaining !== undefined) setTimeRemaining(payload.payload.timeRemaining);
+      if (payload.payload.timerActive !== undefined) setTimerActive(payload.payload.timerActive);
+      if (payload.payload.timerStatus !== undefined) setTimerStatus(payload.payload.timerStatus);
+      if (payload.payload.maxTime !== undefined) setMaxTime(payload.payload.maxTime);
     });
 
     // Listen to Request State (from new users)
     channel.on("broadcast", { event: "request-state" }, () => {
-      if (isMaster) {
+      if (stateRef.current.isHost) {
         channel.send({
           type: "broadcast",
           event: "state-update",
           payload: {
-            activeDrawer: activeDrawerRef.current,
-            scores: scoresRef.current,
+            activeDrawer: stateRef.current.activeDrawer,
+            scores: stateRef.current.scores,
+            timeRemaining: stateRef.current.timeRemaining,
+            timerActive: stateRef.current.timerActive,
+            timerStatus: stateRef.current.timerStatus,
+            maxTime: stateRef.current.maxTime,
           },
         });
       }
@@ -208,6 +267,7 @@ export default function GameRoom({ roomId }: GameRoomProps) {
         }
       });
       setActiveUsers(users);
+      setPresenceSynced(true);
     });
 
     channel.subscribe(async (status, err) => {
@@ -232,8 +292,12 @@ export default function GameRoom({ roomId }: GameRoomProps) {
             type: "broadcast",
             event: "state-update",
             payload: {
-              activeDrawer: activeDrawerRef.current,
-              scores: scoresRef.current,
+              activeDrawer: stateRef.current.activeDrawer,
+              scores: stateRef.current.scores,
+              timeRemaining: stateRef.current.timeRemaining,
+              timerActive: stateRef.current.timerActive,
+              timerStatus: stateRef.current.timerStatus,
+              maxTime: stateRef.current.maxTime,
             },
           });
         }
@@ -244,6 +308,44 @@ export default function GameRoom({ roomId }: GameRoomProps) {
       channel.unsubscribe();
     };
   }, [isJoined, userName, userColor, isMaster, roomId]);
+
+  // Host Timer Tick Loop
+  useEffect(() => {
+    if (!isJoined) return;
+
+    const interval = setInterval(() => {
+      const current = stateRef.current;
+      if (!current.isHost || !current.timerActive) return;
+
+      const newTime = Math.max(0, current.timeRemaining - 1);
+      let newStatus = current.timerStatus;
+      let newActive: boolean = current.timerActive;
+
+      if (newTime === 0) {
+        newStatus = "ended";
+        newActive = false;
+      }
+
+      setTimeRemaining(newTime);
+      setTimerStatus(newStatus);
+      setTimerActive(newActive);
+
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "state-update",
+        payload: {
+          activeDrawer: current.activeDrawer,
+          scores: current.scores,
+          timeRemaining: newTime,
+          timerActive: newActive,
+          timerStatus: newStatus,
+          maxTime: current.maxTime,
+        },
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isJoined]);
 
   // Join handler for identity form inside this room
   const handleJoin = (e: React.FormEvent) => {
@@ -283,12 +385,25 @@ export default function GameRoom({ roomId }: GameRoomProps) {
     // Clear canvas when a new drawer is set to start fresh
     handleClear();
 
+    // Auto-trigger timer if drawer is assigned
+    const nextTime = maxTime;
+    const nextActive = name !== null;
+    const nextStatus = name !== null ? ("running" as const) : ("idle" as const);
+
+    setTimeRemaining(nextTime);
+    setTimerActive(nextActive);
+    setTimerStatus(nextStatus);
+
     channelRef.current?.send({
       type: "broadcast",
       event: "state-update",
       payload: {
         activeDrawer: name,
         scores: scoresRef.current,
+        timeRemaining: nextTime,
+        timerActive: nextActive,
+        timerStatus: nextStatus,
+        maxTime,
       },
     });
   };
@@ -305,12 +420,20 @@ export default function GameRoom({ roomId }: GameRoomProps) {
     // Trigger local & remote confetti celebration automatically
     handleCelebrate();
 
+    // Stop timer
+    setTimerActive(false);
+    setTimerStatus("idle");
+
     channelRef.current?.send({
       type: "broadcast",
       event: "state-update",
       payload: {
         activeDrawer: activeDrawerRef.current,
         scores: newScores,
+        timeRemaining,
+        timerActive: false,
+        timerStatus: "idle",
+        maxTime,
       },
     });
   };
@@ -323,12 +446,22 @@ export default function GameRoom({ roomId }: GameRoomProps) {
     setActiveDrawer(null);
     handleClear();
 
+    // Reset timer
+    setTimeRemaining(90);
+    setTimerActive(false);
+    setTimerStatus("idle");
+    setMaxTime(90);
+
     channelRef.current?.send({
       type: "broadcast",
       event: "state-update",
       payload: {
         activeDrawer: null,
         scores: {},
+        timeRemaining: 90,
+        timerActive: false,
+        timerStatus: "idle",
+        maxTime: 90,
       },
     });
   };
@@ -582,10 +715,10 @@ export default function GameRoom({ roomId }: GameRoomProps) {
               </div>
             </div>
 
-            {/* Master-only second row: turn control + reset */}
+            {/* Master-only second row: turn control + timer controls + reset */}
             {isMaster && (
-              <div className="flex items-center gap-2 pb-2">
-                <div className="flex-1 flex items-center gap-1.5 bg-slate-800/60 border border-slate-700 rounded-lg px-2 h-9 min-w-0">
+              <div className="flex flex-wrap items-center gap-2 pb-2">
+                <div className="flex-1 flex items-center gap-1.5 bg-slate-800/60 border border-slate-700 rounded-lg px-2 h-9 min-w-[120px]">
                   <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider shrink-0">
                     Turno:
                   </span>
@@ -608,6 +741,83 @@ export default function GameRoom({ roomId }: GameRoomProps) {
                     ))}
                   </select>
                 </div>
+
+                {/* Manual Timer Controls */}
+                <div className="flex items-center gap-1.5 bg-slate-800/60 border border-slate-700 rounded-lg px-2 h-9">
+                  <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider shrink-0">Timer:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextActive = !timerActive;
+                      const nextStatus = nextActive ? ("running" as const) : ("idle" as const);
+                      setTimerActive(nextActive);
+                      setTimerStatus(nextStatus);
+                      channelRef.current?.send({
+                        type: "broadcast",
+                        event: "state-update",
+                        payload: {
+                          activeDrawer,
+                          scores,
+                          timeRemaining,
+                          timerActive: nextActive,
+                          timerStatus: nextStatus,
+                          maxTime,
+                        }
+                      });
+                    }}
+                    className="p-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors"
+                  >
+                    {timerActive ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTimeRemaining(maxTime);
+                      setTimerStatus("idle");
+                      setTimerActive(false);
+                      channelRef.current?.send({
+                        type: "broadcast",
+                        event: "state-update",
+                        payload: {
+                          activeDrawer,
+                          scores,
+                          timeRemaining: maxTime,
+                          timerActive: false,
+                          timerStatus: "idle",
+                          maxTime,
+                        }
+                      });
+                    }}
+                    className="p-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors"
+                    title="Resetar tempo"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextMax = maxTime === 60 ? 90 : maxTime === 90 ? 120 : maxTime === 120 ? 45 : 60;
+                      setMaxTime(nextMax);
+                      setTimeRemaining(nextMax);
+                      channelRef.current?.send({
+                        type: "broadcast",
+                        event: "state-update",
+                        payload: {
+                          activeDrawer,
+                          scores,
+                          timeRemaining: nextMax,
+                          timerActive,
+                          timerStatus,
+                          maxTime: nextMax,
+                        }
+                      });
+                    }}
+                    className="px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-650 text-[10px] font-bold text-slate-200 transition-colors"
+                  >
+                    {maxTime}s
+                  </button>
+                </div>
+
                 <button
                   onClick={resetGame}
                   className="h-9 px-3 rounded-lg border border-rose-900/40 bg-rose-950/20 hover:bg-rose-900/30 text-rose-400 text-xs font-medium flex items-center gap-1 transition-colors shrink-0"
@@ -678,18 +888,30 @@ export default function GameRoom({ roomId }: GameRoomProps) {
           <div className="flex-1 bg-white relative select-none touch-none overflow-hidden">
             
             {/* Status notification banner (Non-blurred, viewable canvas) */}
-            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-slate-950/80 backdrop-blur-md border border-slate-800/80 text-slate-200 px-4 py-2 rounded-2xl shadow-lg z-10 flex items-center gap-2 pointer-events-none text-xs font-semibold">
-              {activeDrawer ? (
-                <>
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500"></span>
-                  </span>
-                  <span>🎨 <strong className="text-violet-400">{activeDrawer}</strong> está desenhando...</span>
-                  {!canDraw && <span className="text-slate-500 text-[10px] ml-1">(Você está adivinhando)</span>}
-                </>
-              ) : (
-                <span>🔓 Desenho Livre (Todos podem desenhar)</span>
+            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 flex items-center gap-2 z-10 pointer-events-none">
+              <div className="bg-slate-950/80 backdrop-blur-md border border-slate-800/80 text-slate-200 px-4 py-2 rounded-2xl shadow-lg flex items-center gap-2 text-xs font-semibold">
+                {activeDrawer ? (
+                  <>
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500"></span>
+                    </span>
+                    <span>🎨 <strong className="text-violet-400">{activeDrawer}</strong> está desenhando...</span>
+                    {!canDraw && <span className="text-slate-500 text-[10px] ml-1">(Você está adivinhando)</span>}
+                  </>
+                ) : (
+                  <span>🔓 Desenho Livre (Todos podem desenhar)</span>
+                )}
+              </div>
+
+              {/* Timer badge */}
+              {(timerActive || timerStatus === "ended" || activeDrawer !== null) && (
+                <div className={`bg-slate-950/80 backdrop-blur-md border text-xs font-mono font-bold px-3 py-2 rounded-2xl shadow-lg flex items-center gap-1.5 transition-all
+                  ${timerStatus === "ended" ? "border-rose-500/80 text-rose-400 animate-pulse font-extrabold" : timeRemaining <= 15 ? "border-amber-500/80 text-amber-400 animate-pulse" : "border-slate-800/80 text-slate-200"}`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>{timerStatus === "ended" ? "TEMPO ESGOTADO!" : `${timeRemaining}s`}</span>
+                </div>
               )}
             </div>
 

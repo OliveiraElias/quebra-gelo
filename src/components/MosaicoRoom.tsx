@@ -149,8 +149,9 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
       }
 
       // Decrement time every 2 ticks (1 second)
+      const isSecondsTick = tick % 2 === 0;
       let newTime = cur.time;
-      if (tick % 2 === 0) {
+      if (isSecondsTick) {
         newTime = Math.max(0, cur.time - 1);
       }
 
@@ -165,7 +166,7 @@ export default function MosaicoRoom({ roomId }: { roomId: string }) {
       const shouldShuffle = newStatus === "playing" && ticksPerShuffle > 0 && (tick % ticksPerShuffle === 0);
       const newGrid = shouldShuffle ? shuffleUnpainted(cur.grid) : cur.grid;
 
-      if (tick % 2 === 0) {
+      if (isSecondsTick) {
         setTime(newTime);
       }
       setStatus(newStatus);
