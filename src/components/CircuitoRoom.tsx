@@ -79,6 +79,7 @@ export default function CircuitoRoom({ roomId }: CircuitoRoomProps) {
 
   // Connection & Active Users
   const [activeUsers, setActiveUsers] = useState<PresenceUser[]>([]);
+  const [presenceSynced, setPresenceSynced] = useState(false);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   // Game States (synced via Master/Host client)
@@ -101,12 +102,12 @@ export default function CircuitoRoom({ roomId }: CircuitoRoomProps) {
     if (activeUsers.length === 0) return null;
     const eliasPresent = activeUsers.some((u) => u.name.toLowerCase() === "elias");
     if (eliasPresent) return "elias";
-    // Otherwise, first alphabetically or by presence ref
-    const sorted = [...activeUsers].sort((a, b) => a.presence_ref.localeCompare(b.presence_ref));
+    // Otherwise, first alphabetically
+    const sorted = [...activeUsers].sort((a, b) => a.name.localeCompare(b.name));
     return sorted[0]?.name || null;
   };
 
-  const isHost = isEliasMaster || (getHostName() === userName && !activeUsers.some((u) => u.name.toLowerCase() === "elias"));
+  const isHost = isEliasMaster || (presenceSynced && getHostName() === userName && !activeUsers.some((u) => u.name.toLowerCase() === "elias"));
 
   // Refs for host loop to avoid closures on stale state
   const stateRef = useRef({
@@ -270,7 +271,10 @@ export default function CircuitoRoom({ roomId }: CircuitoRoomProps) {
 
   // Setup Supabase Channel
   useEffect(() => {
-    if (!isJoined || !userName.trim()) return;
+    if (!isJoined || !userName.trim()) {
+      setPresenceSynced(false);
+      return;
+    }
 
     const channel = supabase.channel(`circuito:${roomId}`, {
       config: {
@@ -335,6 +339,7 @@ export default function CircuitoRoom({ roomId }: CircuitoRoomProps) {
         }
       });
       setActiveUsers(users);
+      setPresenceSynced(true);
     });
 
     channel.subscribe(async (status, err) => {
@@ -555,24 +560,6 @@ export default function CircuitoRoom({ roomId }: CircuitoRoomProps) {
                 >
                   Entrar no Jogo
                 </button>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => router.push("/")}
-                    className="h-10 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl flex items-center justify-center gap-1.5 border border-slate-700/50 active:scale-95 transition-all text-xs"
-                  >
-                    <Paintbrush className="w-3.5 h-3.5 text-pink-400" />
-                    Desenho
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => router.push("/sincronia")}
-                    className="h-10 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl flex items-center justify-center gap-1.5 border border-slate-700/50 active:scale-95 transition-all text-xs"
-                  >
-                    <Compass className="w-3.5 h-3.5 text-indigo-400" />
-                    Sincronia
-                  </button>
-                </div>
               </div>
             </form>
           </div>
@@ -629,13 +616,6 @@ export default function CircuitoRoom({ roomId }: CircuitoRoomProps) {
                     Resetar
                   </button>
                 )}
-                <button
-                  onClick={() => router.push("/")}
-                  className="h-9 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
-                >
-                  <Home className="w-3.5 h-3.5" />
-                  Sair
-                </button>
               </div>
             </div>
           </header>

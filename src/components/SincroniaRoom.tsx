@@ -27,9 +27,11 @@ type PresenceUser = {
   name: string;
   color: string;
   presence_ref: string;
-  lockedControlId: string | null; // which control this user is holding
-  currentValX: number;
-  currentValY?: number;
+  plasmaX: number;
+  harmonicY: number;
+  phaseDial: number;
+  magPadX: number;
+  magPadY: number;
 };
 
 type GameControl = {
@@ -72,6 +74,14 @@ const DEFAULT_TARGETS: TargetState = {
   "mag-pad": { xMin: 40, xMax: 60, yMin: 40, yMax: 60 },
 };
 
+const INITIAL_CONTROL_VALUES = {
+  "plasma-x": 50,
+  "harmonic-y": 50,
+  "phase-dial": 0, // angle in degrees 0-360
+  "mag-pad-x": 50,
+  "mag-pad-y": 50,
+};
+
 type SincroniaRoomProps = {
   roomId: string;
 };
@@ -92,18 +102,12 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
 
   // Active Users list
   const [activeUsers, setActiveUsers] = useState<PresenceUser[]>([]);
+  const [presenceSynced, setPresenceSynced] = useState(false);
 
   // Local state for dragging controls
-  const [localControlValues, setLocalControlValues] = useState({
-    "plasma-x": 50,
-    "harmonic-y": 50,
-    "phase-dial": 0, // angle in degrees 0-360
-    "mag-pad-x": 50,
-    "mag-pad-y": 50,
-  });
+  const [localControlValues, setLocalControlValues] = useState(INITIAL_CONTROL_VALUES);
 
-  // Locked control by current player
-  const [myLockedControl, setMyLockedControl] = useState<string | null>(null);
+
 
   // Target states (synced from host)
   const [targets, setTargets] = useState<TargetState>(DEFAULT_TARGETS);
@@ -124,6 +128,9 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
   // Supabase Channel
   const channelRef = useRef<any>(null);
 
+  const lastSyncRef = useRef<number>(0);
+  const syncTimeoutRef = useRef<any>(null);
+
   const isEliasMaster = userName.trim().toLowerCase() === "elias";
 
   // Host detection logic
@@ -131,11 +138,11 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
     if (activeUsers.length === 0) return null;
     const eliasPresent = activeUsers.some((u) => u.name.toLowerCase() === "elias");
     if (eliasPresent) return "elias";
-    const sorted = [...activeUsers].sort((a, b) => a.presence_ref.localeCompare(b.presence_ref));
+    const sorted = [...activeUsers].sort((a, b) => a.name.localeCompare(b.name));
     return sorted[0]?.name || null;
   };
 
-  const isHost = isEliasMaster || (getHostName() === userName && !activeUsers.some((u) => u.name.toLowerCase() === "elias"));
+  const isHost = isEliasMaster || (presenceSynced && getHostName() === userName && !activeUsers.some((u) => u.name.toLowerCase() === "elias"));
 
   // Ref to share fresh state with the interval loop
   const stateRef = useRef({
@@ -145,7 +152,6 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
     targets,
     localControlValues,
     activeUsers,
-    myLockedControl,
     isStormActive,
   });
 
@@ -157,10 +163,9 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
       targets,
       localControlValues,
       activeUsers,
-      myLockedControl,
       isStormActive,
     };
-  }, [gameStatus, globalSync, timeRemaining, targets, localControlValues, activeUsers, myLockedControl, isStormActive]);
+  }, [gameStatus, globalSync, timeRemaining, targets, localControlValues, activeUsers, isStormActive]);
 
   // Load color on mount
   useEffect(() => {
@@ -254,46 +259,35 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
       const current = stateRef.current;
       if (current.gameStatus !== "playing") return;
 
-      // 1. Evaluate alignment of active controls
-      // Active controls = controls locked by active users, or all if solo.
-      const assignedControls = new Set(
-        current.activeUsers
-          .map((u) => u.lockedControlId)
-          .filter((id): id is string => id !== null)
-      );
+      // 1. Evaluate alignment of all controls for all active users
+      let totalBoxes = 0;
+      let alignedBoxes = 0;
 
-      const controlsToEvaluate = assignedControls.size > 0 
-        ? Array.from(assignedControls) 
-        : ["plasma-x", "harmonic-y", "phase-dial", "mag-pad"];
+      current.activeUsers.forEach((u) => {
+        // Resolve control values for this user
+        // If it's me, use local values; otherwise, use their presence values
+        const uVals = {
+          "plasma-x": u.name === userName ? current.localControlValues["plasma-x"] : u.plasmaX,
+          "harmonic-y": u.name === userName ? current.localControlValues["harmonic-y"] : u.harmonicY,
+          "phase-dial": u.name === userName ? current.localControlValues["phase-dial"] : u.phaseDial,
+          "mag-pad-x": u.name === userName ? current.localControlValues["mag-pad-x"] : u.magPadX,
+          "mag-pad-y": u.name === userName ? current.localControlValues["mag-pad-y"] : u.magPadY,
+        };
 
-      // Check if all designated controls are inside target brackets
-      let allAligned = true;
-      controlsToEvaluate.forEach((ctrlId) => {
-        // Resolve values
-        // For non-local users, fetch their current values from the activeUsers presence state
-        let testValues = { ...current.localControlValues };
-        
-        current.activeUsers.forEach((u) => {
-          if (u.name !== userName && u.lockedControlId === ctrlId) {
-            if (ctrlId === "mag-pad") {
-              testValues["mag-pad-x"] = u.currentValX;
-              testValues["mag-pad-y"] = u.currentValY ?? 50;
-            } else {
-              // @ts-ignore
-              testValues[ctrlId] = u.currentValX;
-            }
+        CONTROLS.forEach((ctrl) => {
+          totalBoxes++;
+          if (checkControlAligned(ctrl.id, uVals, current.targets)) {
+            alignedBoxes++;
           }
         });
-
-        const aligned = checkControlAligned(ctrlId, testValues, current.targets);
-        if (!aligned) {
-          allAligned = false;
-        }
       });
+
+      // Majority rule: strictly more than 50% of the total active boxes are aligned
+      const hasMajority = totalBoxes > 0 && (alignedBoxes > totalBoxes / 2);
 
       // 2. Adjust Sync Progress
       let newSync = current.globalSync;
-      if (allAligned) {
+      if (hasMajority) {
         newSync += current.isStormActive ? 2.5 : 4.5; // storm slows down charge progress
       } else {
         newSync -= 1.5; // slow decay if not synchronized
@@ -364,7 +358,10 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
 
   // Setup Supabase Realtime Channels
   useEffect(() => {
-    if (!isJoined || !userName.trim()) return;
+    if (!isJoined || !userName.trim()) {
+      setPresenceSynced(false);
+      return;
+    }
 
     const channel = supabase.channel(`sincronia:${roomId}`, {
       config: {
@@ -417,13 +414,16 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
             name: key,
             color: pres[0].color || "#000000",
             presence_ref: pres[0].presence_ref,
-            lockedControlId: pres[0].lockedControlId || null,
-            currentValX: pres[0].currentValX || 50,
-            currentValY: pres[0].currentValY,
+            plasmaX: typeof pres[0].plasmaX === "number" ? pres[0].plasmaX : 50,
+            harmonicY: typeof pres[0].harmonicY === "number" ? pres[0].harmonicY : 50,
+            phaseDial: typeof pres[0].phaseDial === "number" ? pres[0].phaseDial : 0,
+            magPadX: typeof pres[0].magPadX === "number" ? pres[0].magPadX : 50,
+            magPadY: typeof pres[0].magPadY === "number" ? pres[0].magPadY : 50,
           });
         }
       });
       setActiveUsers(users);
+      setPresenceSynced(true);
     });
 
     channel.subscribe(async (status) => {
@@ -431,8 +431,11 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
         await channel.track({
           name: userName,
           color: userColor,
-          lockedControlId: myLockedControl,
-          currentValX: 50,
+          plasmaX: 50,
+          harmonicY: 50,
+          phaseDial: 0,
+          magPadX: 50,
+          magPadY: 50,
           online_at: new Date().toISOString(),
         });
 
@@ -450,44 +453,41 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
     };
   }, [isJoined, userName, userColor, roomId, isHost]);
 
-  // Track values updates over Presence to show sliders moving in real time to others
-  const updatePresenceValues = async (controlId: string | null, valX: number, valY?: number) => {
+  // Sync presence values to other users (throttled to avoid hitting rate limits)
+  const updatePresenceValues = (values: typeof localControlValues, force = false) => {
     if (!channelRef.current) return;
-    await channelRef.current.track({
-      name: userName,
-      color: userColor,
-      lockedControlId: controlId,
-      currentValX: valX,
-      currentValY: valY,
-      online_at: new Date().toISOString(),
-    });
-  };
+    
+    const now = Date.now();
+    const elapsed = now - lastSyncRef.current;
+    
+    const sync = async () => {
+      lastSyncRef.current = Date.now();
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+        syncTimeoutRef.current = null;
+      }
+      try {
+        await channelRef.current.track({
+          name: userName,
+          color: userColor,
+          plasmaX: values["plasma-x"],
+          harmonicY: values["harmonic-y"],
+          phaseDial: values["phase-dial"],
+          magPadX: values["mag-pad-x"],
+          magPadY: values["mag-pad-y"],
+          online_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error("Error syncing presence:", err);
+      }
+    };
 
-  // Lock onto a specific module
-  const handleLockControl = async (controlId: string) => {
-    if (gameStatus !== "playing") return;
-
-    // Check if someone else already locked this control
-    const isAlreadyLocked = activeUsers.some(
-      (u) => u.name !== userName && u.lockedControlId === controlId
-    );
-    if (isAlreadyLocked) return; // cannot lock
-
-    const nextLock = myLockedControl === controlId ? null : controlId;
-    setMyLockedControl(nextLock);
-
-    // Initial value to push
-    let currentX = 50;
-    let currentY: number | undefined = undefined;
-    if (nextLock === "plasma-x") currentX = localControlValues["plasma-x"];
-    else if (nextLock === "harmonic-y") currentX = localControlValues["harmonic-y"];
-    else if (nextLock === "phase-dial") currentX = localControlValues["phase-dial"];
-    else if (nextLock === "mag-pad") {
-      currentX = localControlValues["mag-pad-x"];
-      currentY = localControlValues["mag-pad-y"];
+    if (force || elapsed > 150) {
+      sync();
+    } else {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+      syncTimeoutRef.current = setTimeout(sync, 150);
     }
-
-    await updatePresenceValues(nextLock, currentX, currentY);
   };
 
   // ── TOUCH / MOUSE INTERACTIVE GESTURE HANDLERS ─────────────────────────
@@ -496,44 +496,39 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
   const handleSliderHMove = (clientX: number) => {
     const container = sliderHContainerRef.current;
     if (!container || gameStatus !== "playing") return;
-    // Check lock
-    const isLockedByOther = activeUsers.some((u) => u.name !== userName && u.lockedControlId === "plasma-x");
-    if (isLockedByOther) return;
 
     const rect = container.getBoundingClientRect();
     const xPercentage = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
     const rounded = Number(xPercentage.toFixed(1));
 
-    setLocalControlValues((prev) => ({ ...prev, "plasma-x": rounded }));
-    if (myLockedControl === "plasma-x") {
-      updatePresenceValues("plasma-x", rounded);
-    }
+    setLocalControlValues((prev) => {
+      const nextVals = { ...prev, "plasma-x": rounded };
+      updatePresenceValues(nextVals);
+      return nextVals;
+    });
   };
 
   // 2. Vertical Slider V Drag
   const handleSliderVMove = (clientY: number) => {
     const container = sliderVContainerRef.current;
     if (!container || gameStatus !== "playing") return;
-    const isLockedByOther = activeUsers.some((u) => u.name !== userName && u.lockedControlId === "harmonic-y");
-    if (isLockedByOther) return;
 
     const rect = container.getBoundingClientRect();
     // Invert so 100% is top and 0% is bottom
     const yPercentage = Math.max(0, Math.min(100, (1 - (clientY - rect.top) / rect.height) * 100));
     const rounded = Number(yPercentage.toFixed(1));
 
-    setLocalControlValues((prev) => ({ ...prev, "harmonic-y": rounded }));
-    if (myLockedControl === "harmonic-y") {
-      updatePresenceValues("harmonic-y", rounded);
-    }
+    setLocalControlValues((prev) => {
+      const nextVals = { ...prev, "harmonic-y": rounded };
+      updatePresenceValues(nextVals);
+      return nextVals;
+    });
   };
 
   // 3. Dial rotation Drag
   const handleDialRotation = (clientX: number, clientY: number) => {
     const container = dialContainerRef.current;
     if (!container || gameStatus !== "playing") return;
-    const isLockedByOther = activeUsers.some((u) => u.name !== userName && u.lockedControlId === "phase-dial");
-    if (isLockedByOther) return;
 
     const rect = container.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
@@ -545,18 +540,17 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
     if (angle < 0) angle += 360; // scale 0-360 deg
     const rounded = Math.round(angle);
 
-    setLocalControlValues((prev) => ({ ...prev, "phase-dial": rounded }));
-    if (myLockedControl === "phase-dial") {
-      updatePresenceValues("phase-dial", rounded);
-    }
+    setLocalControlValues((prev) => {
+      const nextVals = { ...prev, "phase-dial": rounded };
+      updatePresenceValues(nextVals);
+      return nextVals;
+    });
   };
 
   // 4. XY Pad Drag
   const handleXYPadMove = (clientX: number, clientY: number) => {
     const container = padContainerRef.current;
     if (!container || gameStatus !== "playing") return;
-    const isLockedByOther = activeUsers.some((u) => u.name !== userName && u.lockedControlId === "mag-pad");
-    if (isLockedByOther) return;
 
     const rect = container.getBoundingClientRect();
     const xVal = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
@@ -565,15 +559,15 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
     const roundedX = Number(xVal.toFixed(1));
     const roundedY = Number(yVal.toFixed(1));
 
-    setLocalControlValues((prev) => ({
-      ...prev,
-      "mag-pad-x": roundedX,
-      "mag-pad-y": roundedY,
-    }));
-
-    if (myLockedControl === "mag-pad") {
-      updatePresenceValues("mag-pad", roundedX, roundedY);
-    }
+    setLocalControlValues((prev) => {
+      const nextVals = {
+        ...prev,
+        "mag-pad-x": roundedX,
+        "mag-pad-y": roundedY,
+      };
+      updatePresenceValues(nextVals);
+      return nextVals;
+    });
   };
 
   // ── END OF GESTURE ACTIONS ─────────────────────────────────────────────
@@ -621,8 +615,8 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
     setTargets(initial.targets);
     setIsStormActive(initial.isStormActive);
     setGameStatus(initial.status);
-    setMyLockedControl(null);
-    await updatePresenceValues(null, 50);
+    setLocalControlValues(INITIAL_CONTROL_VALUES);
+    updatePresenceValues(INITIAL_CONTROL_VALUES, true);
 
     channelRef.current?.send({
       type: "broadcast",
@@ -740,24 +734,6 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
                 >
                   Entrar no Jogo
                 </button>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => router.push("/")}
-                    className="h-10 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl flex items-center justify-center gap-1.5 border border-slate-700/50 active:scale-95 transition-all text-xs"
-                  >
-                    <Paintbrush className="w-3.5 h-3.5 text-pink-400" />
-                    Desenho
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => router.push("/circuito")}
-                    className="h-10 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl flex items-center justify-center gap-1.5 border border-slate-700/50 active:scale-95 transition-all text-xs"
-                  >
-                    <Zap className="w-3.5 h-3.5 text-yellow-400" />
-                    Reator
-                  </button>
-                </div>
               </div>
             </form>
           </div>
@@ -814,13 +790,6 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
                     Resetar
                   </button>
                 )}
-                <button
-                  onClick={() => router.push("/")}
-                  className="h-9 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
-                >
-                  <Home className="w-3.5 h-3.5" />
-                  Sair
-                </button>
               </div>
             </div>
           </header>
@@ -831,7 +800,20 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
             <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mr-2 shrink-0">Frequência:</span>
             <div className="flex items-center gap-2 flex-nowrap py-1">
               {activeUsers.map((user, idx) => {
-                const ctrlName = CONTROLS.find((c) => c.id === user.lockedControlId)?.name || "Lobby";
+                const uVals = {
+                  "plasma-x": user.name === userName ? localControlValues["plasma-x"] : user.plasmaX,
+                  "harmonic-y": user.name === userName ? localControlValues["harmonic-y"] : user.harmonicY,
+                  "phase-dial": user.name === userName ? localControlValues["phase-dial"] : user.phaseDial,
+                  "mag-pad-x": user.name === userName ? localControlValues["mag-pad-x"] : user.magPadX,
+                  "mag-pad-y": user.name === userName ? localControlValues["mag-pad-y"] : user.magPadY,
+                };
+                let alignedCount = 0;
+                CONTROLS.forEach((ctrl) => {
+                  if (checkControlAligned(ctrl.id, uVals, targets)) {
+                    alignedCount++;
+                  }
+                });
+
                 return (
                   <div
                     key={`${user.presence_ref || user.name}-${idx}`}
@@ -839,7 +821,7 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
                   >
                     <div className="w-2 h-2 rounded-full" style={{ backgroundColor: user.color }} />
                     <span className="font-bold">{user.name}</span>
-                    <span className="text-[10px] text-slate-500">({ctrlName})</span>
+                    <span className="text-[10px] text-slate-500">(Sincronia: {alignedCount}/4)</span>
                   </div>
                 );
               })}
@@ -849,43 +831,7 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
           {/* Main workspace */}
           <div className="flex-1 flex flex-col p-4 overflow-y-auto gap-4 items-center justify-start">
 
-            {/* Central synchrony core */}
-            <div className="w-full max-w-lg bg-slate-900/30 border border-slate-800/80 rounded-2xl p-4 flex items-center justify-between shrink-0 relative overflow-hidden">
-              {isStormActive && (
-                <div className="absolute inset-0 bg-rose-950/20 border border-rose-500/30 rounded-2xl flex items-center justify-center animate-pulse pointer-events-none z-10">
-                  <div className="flex items-center gap-2 text-rose-400 font-extrabold text-xs tracking-widest uppercase">
-                    <ShieldAlert className="w-4 h-4 text-rose-400 animate-bounce" />
-                    Tempestade Magnética!
-                  </div>
-                </div>
-              )}
 
-              <div className="flex flex-col min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="text-xs font-mono font-bold text-slate-200">
-                    Estabilidade: {timeRemaining}s
-                  </span>
-                </div>
-                <h2 className="text-sm font-bold text-slate-300 mt-0.5">Sincronia Harmônica</h2>
-              </div>
-
-              {/* Sync Percentage bar */}
-              <div className="flex items-center gap-3 shrink-0">
-                <div className="flex flex-col items-end">
-                  <span className="text-2xl font-black font-mono bg-gradient-to-r from-violet-400 to-pink-400 bg-clip-text text-transparent">
-                    {globalSync}%
-                  </span>
-                  <span className="text-[9px] uppercase font-bold text-slate-500">Global</span>
-                </div>
-                <div className="w-20 h-4 bg-slate-950 rounded-full border border-slate-800 p-0.5 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-violet-500 to-pink-500 transition-all duration-300"
-                    style={{ width: `${globalSync}%` }}
-                  />
-                </div>
-              </div>
-            </div>
 
             {/* Grid of Interactive Modules */}
             {gameStatus === "lobby" ? (
@@ -894,7 +840,7 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
                 <h3 className="font-extrabold text-slate-200">Aguardando Sincronização</h3>
                 <p className="text-xs text-slate-400 mt-2 max-w-xs leading-relaxed">
                   {isHost
-                    ? "Para ligar os filtros de onda, clique em 'Iniciar Sincronia' no topo. Todos os participantes devem se trancar em um controle específico e ajustá-lo na faixa correta simultaneamente."
+                    ? "Para ligar os filtros de onda, clique em 'Iniciar Sincronia' no topo. Se a maioria absoluta de todos os controles (4 por participante) estiver na faixa correta, a sincronia subirá!"
                     : "Aguardando o Host iniciar a calibragem dos defletores magnéticos."}
                 </p>
               </div>
@@ -908,37 +854,38 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
               >
                 {/* 1. HORIZONTAL SLIDER CARD */}
                 <div
-                  className={`p-4 rounded-2xl border flex flex-col gap-3 relative transition-all ${
-                    myLockedControl === "plasma-x" ? "ring-1 ring-violet-500/50 bg-slate-900/50" : "bg-slate-900/20"
-                  } ${getAlignedColor("plasma-x")}`}
+                  className={`p-4 rounded-2xl border flex flex-col gap-3 relative transition-all bg-slate-900/20 ${getAlignedColor("plasma-x")}`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-xs font-bold text-slate-200">Filtro Plasma-X</h3>
                       <span className="text-[9px] text-slate-500 block">Alvo: {targets["plasma-x"].min}% - {targets["plasma-x"].max}%</span>
                     </div>
-                    <button
-                      onClick={() => handleLockControl("plasma-x")}
+                    <span
                       className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded border transition-colors ${
-                        myLockedControl === "plasma-x"
-                          ? "bg-violet-600 text-white border-violet-500"
-                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-900"
+                        checkControlAligned("plasma-x", localControlValues, targets)
+                          ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30 animate-pulse"
+                          : "bg-slate-950 text-slate-500 border-slate-900"
                       }`}
                     >
-                      {myLockedControl === "plasma-x" ? "LOCKED" : "LOCK"}
-                    </button>
+                      {checkControlAligned("plasma-x", localControlValues, targets) ? "Sincronizado" : "Pendente"}
+                    </span>
                   </div>
 
                   {/* Horizontal Slide track */}
                   <div
                     ref={sliderHContainerRef}
+                    onMouseDown={(e) => handleSliderHMove(e.clientX)}
                     onMouseMove={(e) => {
                       if (e.buttons === 1) handleSliderHMove(e.clientX);
+                    }}
+                    onTouchStart={(e) => {
+                      if (e.touches[0]) handleSliderHMove(e.touches[0].clientX);
                     }}
                     onTouchMove={(e) => {
                       if (e.touches[0]) handleSliderHMove(e.touches[0].clientX);
                     }}
-                    className="h-16 w-full bg-slate-950/80 rounded-xl relative border border-slate-900 cursor-pointer overflow-hidden flex items-center justify-center"
+                    className="h-16 w-full bg-slate-950/80 rounded-xl relative border border-slate-900 cursor-pointer overflow-hidden flex items-center justify-center touch-none"
                   >
                     {/* Target highlight zone */}
                     <div
@@ -964,37 +911,38 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
 
                 {/* 2. VERTICAL SLIDER CARD */}
                 <div
-                  className={`p-4 rounded-2xl border flex flex-col gap-3 relative transition-all ${
-                    myLockedControl === "harmonic-y" ? "ring-1 ring-violet-500/50 bg-slate-900/50" : "bg-slate-900/20"
-                  } ${getAlignedColor("harmonic-y")}`}
+                  className={`p-4 rounded-2xl border flex flex-col gap-3 relative transition-all bg-slate-900/20 ${getAlignedColor("harmonic-y")}`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-xs font-bold text-slate-200">Foco Harmônico-Y</h3>
                       <span className="text-[9px] text-slate-500 block">Alvo: {targets["harmonic-y"].min}% - {targets["harmonic-y"].max}%</span>
                     </div>
-                    <button
-                      onClick={() => handleLockControl("harmonic-y")}
+                    <span
                       className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded border transition-colors ${
-                        myLockedControl === "harmonic-y"
-                          ? "bg-violet-600 text-white border-violet-500"
-                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-900"
+                        checkControlAligned("harmonic-y", localControlValues, targets)
+                          ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30 animate-pulse"
+                          : "bg-slate-950 text-slate-500 border-slate-900"
                       }`}
                     >
-                      {myLockedControl === "harmonic-y" ? "LOCKED" : "LOCK"}
-                    </button>
+                      {checkControlAligned("harmonic-y", localControlValues, targets) ? "Sincronizado" : "Pendente"}
+                    </span>
                   </div>
 
                   {/* Vertical Slide track */}
                   <div
                     ref={sliderVContainerRef}
+                    onMouseDown={(e) => handleSliderVMove(e.clientY)}
                     onMouseMove={(e) => {
                       if (e.buttons === 1) handleSliderVMove(e.clientY);
+                    }}
+                    onTouchStart={(e) => {
+                      if (e.touches[0]) handleSliderVMove(e.touches[0].clientY);
                     }}
                     onTouchMove={(e) => {
                       if (e.touches[0]) handleSliderVMove(e.touches[0].clientY);
                     }}
-                    className="h-32 w-full bg-slate-950/80 rounded-xl relative border border-slate-900 cursor-pointer overflow-hidden flex items-center justify-center"
+                    className="h-32 w-full bg-slate-950/80 rounded-xl relative border border-slate-900 cursor-pointer overflow-hidden flex items-center justify-center touch-none"
                   >
                     {/* Target highlight zone */}
                     <div
@@ -1020,38 +968,39 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
 
                 {/* 3. ROTARY DIAL CARD */}
                 <div
-                  className={`p-4 rounded-2xl border flex flex-col gap-3 relative transition-all ${
-                    myLockedControl === "phase-dial" ? "ring-1 ring-violet-500/50 bg-slate-900/50" : "bg-slate-900/20"
-                  } ${getAlignedColor("phase-dial")}`}
+                  className={`p-4 rounded-2xl border flex flex-col gap-3 relative transition-all bg-slate-900/20 ${getAlignedColor("phase-dial")}`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-xs font-bold text-slate-200">Defletor de Fase (Graus)</h3>
                       <span className="text-[9px] text-slate-500 block">Alvo: {targets["phase-dial"].min}° - {targets["phase-dial"].max}°</span>
                     </div>
-                    <button
-                      onClick={() => handleLockControl("phase-dial")}
+                    <span
                       className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded border transition-colors ${
-                        myLockedControl === "phase-dial"
-                          ? "bg-violet-600 text-white border-violet-500"
-                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-900"
+                        checkControlAligned("phase-dial", localControlValues, targets)
+                          ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30 animate-pulse"
+                          : "bg-slate-950 text-slate-500 border-slate-900"
                       }`}
                     >
-                      {myLockedControl === "phase-dial" ? "LOCKED" : "LOCK"}
-                    </button>
+                      {checkControlAligned("phase-dial", localControlValues, targets) ? "Sincronizado" : "Pendente"}
+                    </span>
                   </div>
 
                   {/* Circular Dial Body */}
                   <div className="flex items-center justify-center py-2">
                     <div
                       ref={dialContainerRef}
+                      onMouseDown={(e) => handleDialRotation(e.clientX, e.clientY)}
                       onMouseMove={(e) => {
                         if (e.buttons === 1) handleDialRotation(e.clientX, e.clientY);
+                      }}
+                      onTouchStart={(e) => {
+                        if (e.touches[0]) handleDialRotation(e.touches[0].clientX, e.touches[0].clientY);
                       }}
                       onTouchMove={(e) => {
                         if (e.touches[0]) handleDialRotation(e.touches[0].clientX, e.touches[0].clientY);
                       }}
-                      className="w-28 h-28 rounded-full border border-slate-900 bg-slate-950 relative flex items-center justify-center cursor-pointer shadow-inner"
+                      className="w-28 h-28 rounded-full border border-slate-900 bg-slate-950 relative flex items-center justify-center cursor-pointer shadow-inner touch-none"
                     >
                       {/* Target Ring Sector (approximate viz using svg) */}
                       <svg className="absolute inset-0 w-full h-full pointer-events-none scale-90 -rotate-90">
@@ -1088,9 +1037,7 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
 
                 {/* 4. XY PAD CARD */}
                 <div
-                  className={`p-4 rounded-2xl border flex flex-col gap-3 relative transition-all ${
-                    myLockedControl === "mag-pad" ? "ring-1 ring-violet-500/50 bg-slate-900/50" : "bg-slate-900/20"
-                  } ${getAlignedColor("mag-pad")}`}
+                  className={`p-4 rounded-2xl border flex flex-col gap-3 relative transition-all bg-slate-900/20 ${getAlignedColor("mag-pad")}`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
@@ -1099,28 +1046,31 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
                         Alvo X: {targets["mag-pad"].xMin}-{targets["mag-pad"].xMax}%, Y: {targets["mag-pad"].yMin}-{targets["mag-pad"].yMax}%
                       </span>
                     </div>
-                    <button
-                      onClick={() => handleLockControl("mag-pad")}
+                    <span
                       className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded border transition-colors ${
-                        myLockedControl === "mag-pad"
-                          ? "bg-violet-600 text-white border-violet-500"
-                          : "bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-900"
+                        checkControlAligned("mag-pad", localControlValues, targets)
+                          ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30 animate-pulse"
+                          : "bg-slate-950 text-slate-500 border-slate-900"
                       }`}
                     >
-                      {myLockedControl === "mag-pad" ? "LOCKED" : "LOCK"}
-                    </button>
+                      {checkControlAligned("mag-pad", localControlValues, targets) ? "Sincronizado" : "Pendente"}
+                    </span>
                   </div>
 
                   {/* 2D XY track container */}
                   <div
                     ref={padContainerRef}
+                    onMouseDown={(e) => handleXYPadMove(e.clientX, e.clientY)}
                     onMouseMove={(e) => {
                       if (e.buttons === 1) handleXYPadMove(e.clientX, e.clientY);
+                    }}
+                    onTouchStart={(e) => {
+                      if (e.touches[0]) handleXYPadMove(e.touches[0].clientX, e.touches[0].clientY);
                     }}
                     onTouchMove={(e) => {
                       if (e.touches[0]) handleXYPadMove(e.touches[0].clientX, e.touches[0].clientY);
                     }}
-                    className="h-32 w-full bg-slate-950/80 rounded-xl relative border border-slate-900 cursor-pointer overflow-hidden"
+                    className="h-32 w-full bg-slate-950/80 rounded-xl relative border border-slate-900 cursor-pointer overflow-hidden touch-none"
                   >
                     {/* Target highlight zone block */}
                     <div
@@ -1149,6 +1099,51 @@ export default function SincroniaRoom({ roomId }: SincroniaRoomProps) {
               </div>
             )}
 
+          </div>
+
+          {/* Central synchrony core - Pinned to the bottom for constant visibility */}
+          <div 
+            className="border-t border-slate-900 bg-slate-950/80 backdrop-blur-xl px-4 py-3 shrink-0 flex items-center justify-center w-full z-20"
+            style={{
+              paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))",
+            }}
+          >
+            <div className="w-full max-w-lg bg-slate-900/30 border border-slate-800/80 rounded-2xl p-4 flex items-center justify-between relative overflow-hidden">
+              {isStormActive && (
+                <div className="absolute inset-0 bg-rose-950/20 border border-rose-500/30 rounded-2xl flex items-center justify-center animate-pulse pointer-events-none z-10">
+                  <div className="flex items-center gap-2 text-rose-400 font-extrabold text-xs tracking-widest uppercase">
+                    <ShieldAlert className="w-4 h-4 text-rose-400 animate-bounce" />
+                    Tempestade Magnética!
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-col min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                  <span className="text-xs font-mono font-bold text-slate-200">
+                    Estabilidade: {timeRemaining}s
+                  </span>
+                </div>
+                <h2 className="text-sm font-bold text-slate-300 mt-0.5">Sincronia Harmônica</h2>
+              </div>
+
+              {/* Sync Percentage bar */}
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="flex flex-col items-end">
+                  <span className="text-2xl font-black font-mono bg-gradient-to-r from-violet-400 to-pink-400 bg-clip-text text-transparent">
+                    {globalSync}%
+                  </span>
+                  <span className="text-[9px] uppercase font-bold text-slate-500">Global</span>
+                </div>
+                <div className="w-20 h-4 bg-slate-950 rounded-full border border-slate-800 p-0.5 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-violet-500 to-pink-500 transition-all duration-300"
+                    style={{ width: `${globalSync}%` }}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

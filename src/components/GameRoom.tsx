@@ -533,24 +533,6 @@ export default function GameRoom({ roomId }: GameRoomProps) {
                   <LogIn className="w-5 h-5" />
                   Entrar na Sala
                 </button>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => router.push("/circuito")}
-                    className="h-10 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 font-semibold rounded-xl flex items-center justify-center gap-1.5 border border-slate-700/40 active:scale-95 transition-all text-xs"
-                  >
-                    <Zap className="w-3.5 h-3.5 text-yellow-400" />
-                    Ir para Reator
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => router.push("/sincronia")}
-                    className="h-10 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 font-semibold rounded-xl flex items-center justify-center gap-1.5 border border-slate-700/40 active:scale-95 transition-all text-xs"
-                  >
-                    <Compass className="w-3.5 h-3.5 text-indigo-400" />
-                    Sincronia
-                  </button>
-                </div>
               </div>
             </form>
           </div>
@@ -588,7 +570,7 @@ export default function GameRoom({ roomId }: GameRoomProps) {
                 </div>
               </div>
 
-              {/* Right: celebrate + exit (always visible) */}
+              {/* Right: celebrate (always visible) */}
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={handleCelebrate}
@@ -596,13 +578,6 @@ export default function GameRoom({ roomId }: GameRoomProps) {
                 >
                   <Sparkles className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Celebrar</span>
-                </button>
-                <button
-                  onClick={() => { setIsJoined(false); }}
-                  className="h-9 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
-                >
-                  <Home className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Sair</span>
                 </button>
               </div>
             </div>
