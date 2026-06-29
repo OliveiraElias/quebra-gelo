@@ -13,8 +13,13 @@ const isValidUrl = (url: string): boolean => {
   }
 };
 
-let supabaseUrl = rawUrl || "http://127.0.0.1:54321";
-let supabasePublishableKey = rawKey || "";
+// Sanitize the URL to remove trailing slashes or /rest/v1 suffixes which break WebSockets/Realtime
+const sanitizeUrl = (url: string): string => {
+  return url.trim().replace(/\/+$/, "").replace(/\/rest\/v1$/, "");
+};
+
+let supabaseUrl = rawUrl ? sanitizeUrl(rawUrl) : "http://127.0.0.1:54321";
+let supabasePublishableKey = (rawKey || "").trim();
 
 // Validate the URL if it was provided
 if (rawUrl && !isValidUrl(rawUrl)) {

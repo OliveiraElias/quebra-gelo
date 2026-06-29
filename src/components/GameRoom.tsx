@@ -15,6 +15,8 @@ import {
   Crown,
   RotateCcw,
   Home,
+  Zap,
+  Compass,
 } from "lucide-react";
 import confetti from "canvas-confetti";
 
@@ -95,19 +97,13 @@ export default function GameRoom({ roomId }: GameRoomProps) {
   // Can the current user draw on the canvas?
   const canDraw = !activeDrawer || activeDrawer === userName;
 
-  // Auto-load identity from localStorage on mount
+  // Auto-load identity from sessionStorage on mount (resets each browser session)
   useEffect(() => {
-    const savedName = localStorage.getItem("quebra_gelo_name") || "";
-    const savedColor = localStorage.getItem("quebra_gelo_color") || BRUSH_COLORS[Math.floor(Math.random() * BRUSH_COLORS.length)];
+    const savedColor = sessionStorage.getItem("quebra_gelo_color") || BRUSH_COLORS[Math.floor(Math.random() * BRUSH_COLORS.length)];
 
-    setUserName(savedName);
     setUserColor(savedColor);
     setColor(savedColor);
-
-    // If they already have a saved name, consider them joined immediately
-    if (savedName.trim()) {
-      setIsJoined(true);
-    }
+    // Name is NOT pre-loaded — user must type it every session
   }, []);
 
 
@@ -214,7 +210,8 @@ export default function GameRoom({ roomId }: GameRoomProps) {
       setActiveUsers(users);
     });
 
-    channel.subscribe(async (status) => {
+    channel.subscribe(async (status, err) => {
+      console.log(`[Supabase Realtime] Status: ${status}`, err || "");
       if (status === "SUBSCRIBED") {
         await channel.track({
           name: userName,
@@ -253,8 +250,8 @@ export default function GameRoom({ roomId }: GameRoomProps) {
     e.preventDefault();
     if (!userName.trim()) return;
 
-    localStorage.setItem("quebra_gelo_name", userName);
-    localStorage.setItem("quebra_gelo_color", userColor);
+    // Use sessionStorage so the name is asked again on each new browser session
+    sessionStorage.setItem("quebra_gelo_color", userColor);
 
     setIsJoined(true);
   };
@@ -460,14 +457,22 @@ export default function GameRoom({ roomId }: GameRoomProps) {
   };
 
   return (
-    <main className="flex-1 flex flex-col bg-slate-900 text-slate-100 font-sans min-h-screen">
+    <main className="flex-1 flex flex-col bg-slate-900 text-slate-100 font-sans" style={{ minHeight: '100dvh' }}>
       {!isJoined ? (
         // ── IDENTITY FORM (When entering room directly via link) ─────────────────────────────────
-        <div className="flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+        <div
+          className="flex-1 flex flex-col items-center justify-center relative overflow-y-auto"
+          style={{
+            paddingTop: 'max(1.5rem, env(safe-area-inset-top))',
+            paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
+            paddingLeft: '1.5rem',
+            paddingRight: '1.5rem',
+          }}
+        >
           <div className="absolute top-[-20%] left-[-20%] w-[80%] h-[80%] rounded-full bg-violet-600/20 blur-[120px] pointer-events-none" />
           <div className="absolute bottom-[-20%] right-[-20%] w-[80%] h-[80%] rounded-full bg-pink-600/20 blur-[120px] pointer-events-none" />
 
-          <div className="w-full max-w-md bg-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-8 shadow-2xl relative">
+          <div className="w-full max-w-md bg-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-8 shadow-2xl relative my-auto">
             <div className="text-center mb-8">
               <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-tr from-violet-500 to-pink-500 flex items-center justify-center mb-4 shadow-lg shadow-violet-500/30">
                 <Paintbrush className="w-8 h-8 text-white animate-bounce" />
@@ -520,99 +525,123 @@ export default function GameRoom({ roomId }: GameRoomProps) {
                 </div>
               </div>
 
-              <button
-                type="submit"
-                className="w-full h-12 bg-gradient-to-r from-violet-600 to-pink-600 hover:from-violet-500 hover:to-pink-500 text-white font-semibold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-violet-500/25 active:scale-95 transition-all"
-              >
-                <LogIn className="w-5 h-5" />
-                Entrar na Sala
-              </button>
+              <div className="flex flex-col gap-3">
+                <button
+                  type="submit"
+                  className="w-full h-12 bg-gradient-to-r from-violet-600 to-pink-600 hover:from-violet-500 hover:to-pink-500 text-white font-semibold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-violet-500/25 active:scale-95 transition-all"
+                >
+                  <LogIn className="w-5 h-5" />
+                  Entrar na Sala
+                </button>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => router.push("/circuito")}
+                    className="h-10 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 font-semibold rounded-xl flex items-center justify-center gap-1.5 border border-slate-700/40 active:scale-95 transition-all text-xs"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-yellow-400" />
+                    Ir para Reator
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push("/sincronia")}
+                    className="h-10 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 font-semibold rounded-xl flex items-center justify-center gap-1.5 border border-slate-700/40 active:scale-95 transition-all text-xs"
+                  >
+                    <Compass className="w-3.5 h-3.5 text-indigo-400" />
+                    Sincronia
+                  </button>
+                </div>
+              </div>
             </form>
           </div>
         </div>
       ) : (
         // ── CANVAS ROOM ────────────────────────────────
-        <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden" style={{ height: '100dvh' }}>
           {/* Header */}
-          <header className="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur px-4 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-violet-500 to-pink-500 flex items-center justify-center relative">
-                {isMaster ? (
-                  <Crown className="w-4 h-4 text-white" />
-                ) : (
-                  <Paintbrush className="w-4 h-4 text-white" />
-                )}
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5 font-sans">
-                  <h2 className="text-sm font-bold capitalize bg-gradient-to-r from-violet-400 to-pink-400 bg-clip-text text-transparent">
-                    Sala: {roomName}
-                  </h2>
+          <header
+            className="border-b border-slate-800 bg-slate-900/80 backdrop-blur px-4 flex flex-col shrink-0"
+            style={{
+              paddingTop: 'env(safe-area-inset-top)',
+            }}
+          >
+            {/* Main row */}
+            <div className="flex items-center justify-between gap-2" style={{ minHeight: '3.5rem' }}>
+              {/* Left: user identity */}
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-violet-500 to-pink-500 flex items-center justify-center shrink-0">
+                  {isMaster ? (
+                    <Crown className="w-4 h-4 text-white" />
+                  ) : (
+                    <Paintbrush className="w-4 h-4 text-white" />
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 font-sans min-w-0">
+                  <p className="text-sm font-semibold text-slate-300 truncate">
+                    {userName}
+                  </p>
                   {isMaster && (
-                    <span className="text-[9px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1 rounded font-bold uppercase tracking-wider">
+                    <span className="text-[9px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1 rounded font-bold uppercase tracking-wider shrink-0">
                       Mestre
                     </span>
                   )}
                 </div>
-                <p className="text-[10px] text-slate-500">
-                  Logado como {userName}
-                </p>
+              </div>
+
+              {/* Right: celebrate + exit (always visible) */}
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleCelebrate}
+                  className="h-9 px-3 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 text-violet-400 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Celebrar</span>
+                </button>
+                <button
+                  onClick={() => { setIsJoined(false); }}
+                  className="h-9 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
+                >
+                  <Home className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Sair</span>
+                </button>
               </div>
             </div>
 
-            {/* Header controls (Turn control dropdown for Master) */}
-            <div className="flex items-center gap-2">
-              {isMaster && (
-                <>
-                  <div className="flex items-center gap-1.5 bg-slate-850 border border-slate-800 rounded-lg px-2 h-9">
-                    <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-                      Turno:
-                    </span>
-                    <select
-                      value={activeDrawer || ""}
-                      onChange={(e) => setDrawer(e.target.value || null)}
-                      className="bg-transparent text-xs text-slate-200 outline-none font-semibold cursor-pointer py-1"
-                    >
-                      <option value="" className="bg-slate-900 text-slate-300">
-                        🔓 Desenho Livre
-                      </option>
-                      {activeUsers.map((u) => (
-                        <option
-                          key={u.presence_ref}
-                          value={u.name}
-                          className="bg-slate-900 text-slate-300"
-                        >
-                          🖌️ {u.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <button
-                    onClick={resetGame}
-                    className="h-9 px-3 rounded-lg border border-rose-900/40 bg-rose-950/20 hover:bg-rose-900/30 text-rose-400 text-xs font-medium flex items-center gap-1 transition-colors"
+            {/* Master-only second row: turn control + reset */}
+            {isMaster && (
+              <div className="flex items-center gap-2 pb-2">
+                <div className="flex-1 flex items-center gap-1.5 bg-slate-800/60 border border-slate-700 rounded-lg px-2 h-9 min-w-0">
+                  <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider shrink-0">
+                    Turno:
+                  </span>
+                  <select
+                    value={activeDrawer || ""}
+                    onChange={(e) => setDrawer(e.target.value || null)}
+                    className="bg-transparent text-xs text-slate-200 outline-none font-semibold cursor-pointer py-1 min-w-0 flex-1"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Reset
-                  </button>
-                </>
-              )}
-              <button
-                onClick={handleCelebrate}
-                className="h-9 px-3 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 text-violet-400 text-xs font-bold flex items-center gap-1.5 transition-colors"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                Celebrar
-              </button>
-              <button
-                onClick={() => {
-                  setIsJoined(false);
-                }}
-                className="h-9 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
-              >
-                <Home className="w-3.5 h-3.5" />
-                Sair
-              </button>
-            </div>
+                    <option value="" className="bg-slate-900 text-slate-300">
+                      🔓 Desenho Livre
+                    </option>
+                    {activeUsers.map((u) => (
+                      <option
+                        key={u.presence_ref}
+                        value={u.name}
+                        className="bg-slate-900 text-slate-300"
+                      >
+                        🖌️ {u.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={resetGame}
+                  className="h-9 px-3 rounded-lg border border-rose-900/40 bg-rose-950/20 hover:bg-rose-900/30 text-rose-400 text-xs font-medium flex items-center gap-1 transition-colors shrink-0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reset
+                </button>
+              </div>
+            )}
           </header>
 
           {/* Active Users & Scores Bar */}
@@ -703,52 +732,74 @@ export default function GameRoom({ roomId }: GameRoomProps) {
           </div>
 
           {/* Bottom Toolbar */}
-          <div className="p-4 border-t border-slate-800 bg-slate-950/80 backdrop-blur-xl shrink-0 flex flex-col gap-3">
-            {/* Color & Tool picker */}
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIsEraser(false)}
-                  disabled={!canDraw}
-                  className={`p-2.5 rounded-xl border transition-all ${
-                    !isEraser && canDraw
-                      ? "bg-violet-600/20 border-violet-500 text-violet-400 shadow-md"
-                      : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-30"
-                  }`}
-                >
-                  <Palette className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={() => setIsEraser(true)}
-                  disabled={!canDraw}
-                  className={`p-2.5 rounded-xl border transition-all ${
-                    isEraser && canDraw
-                      ? "bg-violet-600/20 border-violet-500 text-violet-400 shadow-md"
-                      : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-30"
-                  }`}
-                >
-                  <Eraser className="w-5 h-5" />
-                </button>
-              </div>
+          <div
+            className="border-t border-slate-800 bg-slate-950/80 backdrop-blur-xl shrink-0 flex flex-col gap-3"
+            style={{
+              padding: '1rem',
+              paddingBottom: 'max(1rem, env(safe-area-inset-bottom))',
+            }}
+          >
+            {/* Brush size slider — full width row */}
+            <div className="flex items-center gap-3 bg-slate-900/60 border border-slate-800 rounded-xl px-4 h-11">
+              <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider shrink-0">
+                Espessura
+              </span>
+              <input
+                type="range"
+                min="2"
+                max="20"
+                disabled={!canDraw}
+                value={brushSize}
+                onChange={(e) => setBrushSize(Number(e.target.value))}
+                className="w-full accent-violet-500 h-1 bg-slate-800 rounded-lg cursor-pointer disabled:opacity-30"
+              />
+              <span className="text-xs font-mono text-slate-300 w-6 text-right shrink-0">
+                {brushSize}px
+              </span>
+            </div>
 
-              {/* Slider for brush size */}
-              <div className="flex-1 flex items-center gap-3 bg-slate-900/60 border border-slate-800 rounded-xl px-4 h-11">
-                <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider shrink-0">
-                  Espessura
-                </span>
-                <input
-                  type="range"
-                  min="2"
-                  max="20"
-                  disabled={!canDraw}
-                  value={brushSize}
-                  onChange={(e) => setBrushSize(Number(e.target.value))}
-                  className="w-full accent-violet-500 h-1 bg-slate-800 rounded-lg cursor-pointer disabled:opacity-30"
-                />
-                <span className="text-xs font-mono text-slate-300 w-6 text-right shrink-0">
-                  {brushSize}px
-                </span>
-              </div>
+            {/* Tools + Color palette row */}
+            <div className="flex items-center gap-2">
+              {/* Palette / Eraser toggle */}
+              <button
+                onClick={() => setIsEraser(false)}
+                disabled={!canDraw}
+                className={`p-2.5 rounded-xl border transition-all shrink-0 ${
+                  !isEraser && canDraw
+                    ? "bg-violet-600/20 border-violet-500 text-violet-400 shadow-md"
+                    : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-30"
+                }`}
+              >
+                <Palette className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => setIsEraser(true)}
+                disabled={!canDraw}
+                className={`p-2.5 rounded-xl border transition-all shrink-0 ${
+                  isEraser && canDraw
+                    ? "bg-violet-600/20 border-violet-500 text-violet-400 shadow-md"
+                    : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-30"
+                }`}
+              >
+                <Eraser className="w-5 h-5" />
+              </button>
+
+              {/* Color palette (hidden when eraser active) */}
+              {!isEraser && (
+                <div className="flex-1 flex items-center justify-between gap-1 overflow-x-auto scrollbar-none">
+                  {BRUSH_COLORS.map((c, i) => (
+                    <button
+                      key={`${c}-${i}`}
+                      disabled={!canDraw}
+                      onClick={() => setColor(c)}
+                      className={`h-9 w-9 rounded-xl flex-shrink-0 transition-all ${
+                        color === c && canDraw ? "ring-2 ring-white scale-110" : "opacity-80 hover:opacity-100 disabled:opacity-30"
+                      }`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+              )}
 
               {/* Trash/Clear */}
               <button
@@ -759,24 +810,8 @@ export default function GameRoom({ roomId }: GameRoomProps) {
                 <Trash2 className="w-5 h-5" />
               </button>
             </div>
-
-            {/* Bottom palette */}
-            {!isEraser && (
-              <div className="flex items-center justify-between gap-1 overflow-x-auto py-1 scrollbar-none">
-                {BRUSH_COLORS.map((c, i) => (
-                  <button
-                    key={`${c}-${i}`}
-                    disabled={!canDraw}
-                    onClick={() => setColor(c)}
-                    className={`h-9 w-9 rounded-xl relative flex-shrink-0 transition-all ${
-                      color === c && canDraw ? "ring-2 ring-white scale-110" : "opacity-80 hover:opacity-100 disabled:opacity-30"
-                    }`}
-                    style={{ backgroundColor: c }}
-                  />
-                ))}
-              </div>
-            )}
           </div>
+
         </div>
       )}
     </main>
